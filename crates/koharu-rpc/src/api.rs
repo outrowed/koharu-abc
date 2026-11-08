@@ -77,7 +77,7 @@ fn presented_token<'a>(headers: &'a axum::http::HeaderMap, uri: &'a Uri) -> Opti
     })
 }
 
-fn authorized(headers: &axum::http::HeaderMap, uri: &Uri, expected: &str) -> bool {
+pub(crate) fn authorized(headers: &axum::http::HeaderMap, uri: &Uri, expected: &str) -> bool {
     presented_token(headers, uri).is_some_and(|presented| secret_eq(&presented, expected))
 }
 
@@ -118,7 +118,8 @@ pub fn router(app: AppState, static_dir: Option<PathBuf>, api_token: Option<Stri
             require_token,
         ));
     }
-    let mut router = Router::new().nest("/api/v1", api);
+    let v1 = routes::inference::v1_router(Arc::<str>::from(api_token.clone().unwrap_or_default()));
+    let mut router = Router::new().nest("/api/v1", api).nest("/v1", v1);
 
     if let Some(dir) = static_dir {
         if dir.is_dir() {

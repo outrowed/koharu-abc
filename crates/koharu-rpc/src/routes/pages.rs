@@ -612,7 +612,7 @@ mod tests {
         let archive = archive_directory(root.path()).unwrap();
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(archive)).unwrap();
         let mut names: Vec<_> = (0..zip.len())
-            .map(|index| zip.by_index(index).unwrap().name().to_owned())
+            .map(|index| zip.by_index(index).unwrap().name().unwrap().into_owned())
             .collect();
         names.sort();
         assert_eq!(names, vec!["png/0001_a.png", "psd/0001_a.psd"]);
@@ -627,7 +627,7 @@ mod tests {
         let archive = archive_directory(root.path()).unwrap();
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(archive)).unwrap();
         assert_eq!(zip.len(), 2);
-        assert_eq!(zip.by_index(0).unwrap().name(), "0001_a.png");
+        assert_eq!(zip.by_index(0).unwrap().name().unwrap(), "0001_a.png");
     }
 
     #[test]

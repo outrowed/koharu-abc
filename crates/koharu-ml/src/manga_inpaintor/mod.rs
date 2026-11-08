@@ -90,10 +90,7 @@ mod tests {
     use crate::source::ComponentSource;
 
     #[tokio::test]
-    #[cfg_attr(
-        windows,
-        ignore = "Windows resolves LibTorch only once Runtime::initialize preloads it"
-    )]
+    #[ignore = "requires the dynamically loaded LibTorch runtime"]
     async fn a_non_archive_file_fails_with_the_loader_context() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("garbage.jit");

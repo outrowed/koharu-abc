@@ -817,7 +817,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_rotated_shape_is_not_clipped_by_its_crop() {        // Task 4 made `Layer::bounds` the AABB of the rotated frame box, which
+    async fn a_rotated_shape_is_not_clipped_by_its_crop() {
+        // Task 4 made `Layer::bounds` the AABB of the rotated frame box, which
         // is what `Frame::cropped` clips to. This pins that result for export: a
         // 45°-rotated 48x32 rect must crop at least as tall as its swept height
         // (48/√2 + 32/√2 ≈ 56.6), not the unrotated 32.

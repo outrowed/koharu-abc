@@ -1015,6 +1015,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the dynamically loaded llama.cpp runtime"]
     fn kv_cache_and_flash_attention_reach_the_context_params() {
         let options = GenerationOptions {
             max_tokens: 10,

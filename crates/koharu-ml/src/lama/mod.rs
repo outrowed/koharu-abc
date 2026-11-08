@@ -90,10 +90,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg_attr(
-        windows,
-        ignore = "Windows resolves LibTorch only once Runtime::initialize preloads it"
-    )]
+    #[ignore = "requires the dynamically loaded LibTorch runtime"]
     async fn the_format_picks_which_loader_reads_the_file() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("garbage.pt");

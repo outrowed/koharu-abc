@@ -146,7 +146,12 @@ function RuntimeSelector({
         model: next,
       },
     }
-    void savePreferences(pipeline, preferences.providers, preferences.typesetting)
+    void savePreferences(
+      pipeline,
+      preferences.providers,
+      preferences.typesetting,
+      preferences.remote_credentials,
+    )
       .then((saved) => {
         receivePreferences(saved)
       })
@@ -170,7 +175,12 @@ function RuntimeSelector({
         instructions: draft.instructions || null,
       },
     }
-    void savePreferences(pipeline, preferences.providers, preferences.typesetting)
+    void savePreferences(
+      pipeline,
+      preferences.providers,
+      preferences.typesetting,
+      preferences.remote_credentials,
+    )
       .then((saved) => {
         receivePreferences(saved)
       })

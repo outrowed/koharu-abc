@@ -24,6 +24,12 @@ import { StatusBar } from '@/components/editor/StatusBar'
 import { ToolBar } from '@/components/editor/ToolBar'
 import { ProviderPreferences } from '@/components/preferences/ProviderPreferences'
 import { SettingsPage } from '@/components/preferences/SettingsPage'
+import { FONT_FAVORITES_STORAGE_KEY, useFontFavorites } from '@/lib/fontFavorites'
+import {
+  FORK_PREFERENCES_STORAGE_KEY,
+  forkPreferenceDefaults,
+  useForkPreferences,
+} from '@/lib/forkPreferences'
 import {
   fontsKey,
   pageKey,
@@ -33,12 +39,6 @@ import {
   queryClient,
   useCommand,
 } from '@/lib/queries'
-import { FONT_FAVORITES_STORAGE_KEY, useFontFavorites } from '@/lib/fontFavorites'
-import {
-  FORK_PREFERENCES_STORAGE_KEY,
-  forkPreferenceDefaults,
-  useForkPreferences,
-} from '@/lib/forkPreferences'
 import { fillKind } from '@/lib/shapes'
 import { useKoharuStore } from '@/lib/store'
 import * as canvasRuntime from '@koharu/bridge/canvas'
@@ -244,6 +244,11 @@ const preferences: Preferences = {
     },
     inpainting: { model: 'lama' },
     processor: {},
+  },
+  remote_credentials: {
+    detection: emptyCredential(),
+    ocr: emptyCredential(),
+    inpainting: emptyCredential(),
   },
   providers: {
     entries: [
@@ -1207,16 +1212,18 @@ describe('greenfield editor', () => {
     // The inspector renders from the page query, not from a local draft, so the
     // stub has to publish the committed style back or the button would never
     // reach the 32-stop ceiling. The real command round-trips the same way.
-    const setShapeStyle = vi.spyOn(commands, 'setShapeStyle').mockImplementation(async (_r, updates) => {
-      queryClient.setQueryData(pageKey, (page: { layers: Layer[] }) => ({
-        ...page,
-        layers: page.layers.map((layer) => {
-          const update = updates.find((entry) => entry.element === layer.id)
-          return update ? { ...layer, style: update.style } : layer
-        }),
-      }))
-      return 2
-    })
+    const setShapeStyle = vi
+      .spyOn(commands, 'setShapeStyle')
+      .mockImplementation(async (_r, updates) => {
+        queryClient.setQueryData(pageKey, (page: { layers: Layer[] }) => ({
+          ...page,
+          layers: page.layers.map((layer) => {
+            const update = updates.find((entry) => entry.element === layer.id)
+            return update ? { ...layer, style: update.style } : layer
+          }),
+        }))
+        return 2
+      })
     useKoharuStore.setState({ selectedLayers: ['shape-gradient'], canvasRevision: 1 })
     render(<Inspector />)
 
@@ -1419,7 +1426,9 @@ describe('greenfield editor', () => {
   it('applies a brightness adjustment to a selected raster layer', async () => {
     installProject()
     const user = userEvent.setup()
-    const adjustRaster = vi.spyOn(commands, 'adjustRaster').mockResolvedValue({ revision: 2, layer: 'raster' })
+    const adjustRaster = vi
+      .spyOn(commands, 'adjustRaster')
+      .mockResolvedValue({ revision: 2, layer: 'raster' })
     queryClient.setQueryData(pageKey, (page: { layers: Layer[] }) => ({
       ...page,
       layers: [...page.layers, rasterLayer],
@@ -1488,7 +1497,9 @@ describe('greenfield editor', () => {
   it('applies the adjustment kind selected from the dropdown', async () => {
     installProject()
     const user = userEvent.setup()
-    const adjustRaster = vi.spyOn(commands, 'adjustRaster').mockResolvedValue({ revision: 2, layer: 'raster' })
+    const adjustRaster = vi
+      .spyOn(commands, 'adjustRaster')
+      .mockResolvedValue({ revision: 2, layer: 'raster' })
     queryClient.setQueryData(pageKey, (page: { layers: Layer[] }) => ({
       ...page,
       layers: [...page.layers, rasterLayer],
@@ -1504,7 +1515,11 @@ describe('greenfield editor', () => {
     await user.click(screen.getByRole('button', { name: 'Apply' }))
 
     await waitFor(() =>
-      expect(adjustRaster).toHaveBeenCalledWith(1, 'raster', { type: 'levels', low: 10, high: 240 }),
+      expect(adjustRaster).toHaveBeenCalledWith(1, 'raster', {
+        type: 'levels',
+        low: 10,
+        high: 240,
+      }),
     )
   })
 
@@ -1512,7 +1527,9 @@ describe('greenfield editor', () => {
     // The server rejects `low >= high`; the UI must not be able to send it.
     installProject()
     const user = userEvent.setup()
-    const adjustRaster = vi.spyOn(commands, 'adjustRaster').mockResolvedValue({ revision: 2, layer: 'raster' })
+    const adjustRaster = vi
+      .spyOn(commands, 'adjustRaster')
+      .mockResolvedValue({ revision: 2, layer: 'raster' })
     queryClient.setQueryData(pageKey, (page: { layers: Layer[] }) => ({
       ...page,
       layers: [...page.layers, rasterLayer],
@@ -1536,7 +1553,9 @@ describe('greenfield editor', () => {
   it('clamps adjustment inputs to the server ranges', async () => {
     installProject()
     const user = userEvent.setup()
-    const adjustRaster = vi.spyOn(commands, 'adjustRaster').mockResolvedValue({ revision: 2, layer: 'raster' })
+    const adjustRaster = vi
+      .spyOn(commands, 'adjustRaster')
+      .mockResolvedValue({ revision: 2, layer: 'raster' })
     queryClient.setQueryData(pageKey, (page: { layers: Layer[] }) => ({
       ...page,
       layers: [...page.layers, rasterLayer],
@@ -1569,7 +1588,9 @@ describe('greenfield editor', () => {
   it('applies a grayscale adjustment with no parameters', async () => {
     installProject()
     const user = userEvent.setup()
-    const adjustRaster = vi.spyOn(commands, 'adjustRaster').mockResolvedValue({ revision: 2, layer: 'raster' })
+    const adjustRaster = vi
+      .spyOn(commands, 'adjustRaster')
+      .mockResolvedValue({ revision: 2, layer: 'raster' })
     queryClient.setQueryData(pageKey, (page: { layers: Layer[] }) => ({
       ...page,
       layers: [...page.layers, rasterLayer],
@@ -1592,7 +1613,9 @@ describe('greenfield editor', () => {
     // silently adjusting whichever layer happens to be first.
     installProject()
     const user = userEvent.setup()
-    const adjustRaster = vi.spyOn(commands, 'adjustRaster').mockResolvedValue({ revision: 2, layer: 'raster' })
+    const adjustRaster = vi
+      .spyOn(commands, 'adjustRaster')
+      .mockResolvedValue({ revision: 2, layer: 'raster' })
     const second: Layer = { ...rasterLayer, id: 'raster-2', name: 'Paint 2' }
     queryClient.setQueryData(pageKey, (page: { layers: Layer[] }) => ({
       ...page,
@@ -1633,11 +1656,11 @@ describe('greenfield editor', () => {
     installProject()
     const user = userEvent.setup()
     let settle: ((value: { revision: number; layer: string }) => void) | undefined
-    const adjustRaster = vi
-      .spyOn(commands, 'adjustRaster')
-      .mockReturnValue(new Promise((resolve) => {
+    const adjustRaster = vi.spyOn(commands, 'adjustRaster').mockReturnValue(
+      new Promise((resolve) => {
         settle = resolve
-      }))
+      }),
+    )
     queryClient.setQueryData(pageKey, (page: { layers: Layer[] }) => ({
       ...page,
       layers: [...page.layers, rasterLayer],
@@ -2217,6 +2240,7 @@ describe('greenfield editor', () => {
         nextPreferences.pipeline,
         preferences.providers,
         preferences.typesetting,
+        preferences.remote_credentials,
       ),
     )
     expect(
@@ -2240,7 +2264,7 @@ describe('greenfield editor', () => {
     const user = userEvent.setup()
     const save = vi
       .spyOn(commands, 'savePreferences')
-      .mockImplementation(async (pipeline, providers, typesetting) => ({
+      .mockImplementation(async (pipeline, providers, typesetting, _remote_credentials) => ({
         ...preferences,
         pipeline,
         providers,
@@ -2338,6 +2362,7 @@ describe('greenfield editor', () => {
         nextPreferences.pipeline,
         currentPreferences.providers,
         currentPreferences.typesetting,
+        currentPreferences.remote_credentials,
       ),
     )
     expect(useKoharuStore.getState().preferences?.pipeline.translation).toEqual(
@@ -2393,6 +2418,7 @@ describe('greenfield editor', () => {
         nextPreferences.pipeline,
         preferences.providers,
         preferences.typesetting,
+        preferences.remote_credentials,
       ),
     )
     expect(useKoharuStore.getState().preferences?.pipeline.translation).toEqual(
@@ -2457,6 +2483,7 @@ describe('greenfield editor', () => {
         }),
         preferences.providers,
         preferences.typesetting,
+        preferences.remote_credentials,
       ),
     )
     fireEvent.click(screen.getByRole('button', { name: 'Providers' }))
@@ -2485,6 +2512,7 @@ describe('greenfield editor', () => {
         }),
         preferences.providers,
         preferences.typesetting,
+        preferences.remote_credentials,
       ),
     )
     const vision = screen.getByRole('switch', { name: 'Vision' })
@@ -2501,6 +2529,7 @@ describe('greenfield editor', () => {
         }),
         preferences.providers,
         preferences.typesetting,
+        preferences.remote_credentials,
       ),
     )
     expect(screen.getByLabelText('Translation model')).toHaveTextContent('Gemma 4 E2B Instruct')
@@ -2583,6 +2612,7 @@ describe('greenfield editor', () => {
         }),
         configured.providers,
         configured.typesetting,
+        configured.remote_credentials,
       ),
     )
   })
@@ -2598,9 +2628,7 @@ describe('greenfield editor', () => {
     )
 
     await user.click(screen.getByRole('button', { name: 'NeKoharu Features' }))
-    expect(
-      screen.getByRole('heading', { level: 2, name: 'NeKoharu Features' }),
-    ).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 2, name: 'NeKoharu Features' })).toBeInTheDocument()
 
     // N-D3: the fork defaults this to false, but merging has always deleted the
     // originals here, so an empty store must render the switch already on.
@@ -2727,7 +2755,7 @@ describe('greenfield editor', () => {
     useKoharuStore.setState({ settingsOpen: true })
     const save = vi
       .spyOn(commands, 'savePreferences')
-      .mockImplementation(async (pipeline, providers, typesetting) => ({
+      .mockImplementation(async (pipeline, providers, typesetting, _remote_credentials) => ({
         ...preferences,
         pipeline,
         providers: {
@@ -2781,6 +2809,7 @@ describe('greenfield editor', () => {
         }),
         preferences.providers,
         preferences.typesetting,
+        preferences.remote_credentials,
       ),
     )
   })
@@ -2824,7 +2853,7 @@ describe('greenfield editor', () => {
     let invocation = 0
     const save = vi
       .spyOn(commands, 'savePreferences')
-      .mockImplementation(async (pipeline, providers, typesetting) => {
+      .mockImplementation(async (pipeline, providers, typesetting, _remote_credentials) => {
         const saved = { ...configured, pipeline, providers, typesetting }
         if (invocation++ === 0) {
           firstResult = saved
@@ -2909,7 +2938,7 @@ describe('greenfield editor', () => {
     ])
     const save = vi
       .spyOn(commands, 'savePreferences')
-      .mockImplementation(async (pipeline, providers, typesetting) => ({
+      .mockImplementation(async (pipeline, providers, typesetting, _remote_credentials) => ({
         ...preferences,
         pipeline,
         providers,
@@ -2927,15 +2956,25 @@ describe('greenfield editor', () => {
     await user.click(await screen.findByRole('option', { name: 'Arial, System' }))
 
     await waitFor(() =>
-      expect(save).toHaveBeenLastCalledWith(preferences.pipeline, preferences.providers, {
-        font_families: ['Noto Sans', 'Arial'],
-      }),
+      expect(save).toHaveBeenLastCalledWith(
+        preferences.pipeline,
+        preferences.providers,
+        {
+          font_families: ['Noto Sans', 'Arial'],
+        },
+        preferences.remote_credentials,
+      ),
     )
     await user.click(screen.getByRole('button', { name: 'Remove Noto Sans' }))
     await waitFor(() =>
-      expect(save).toHaveBeenLastCalledWith(preferences.pipeline, preferences.providers, {
-        font_families: ['Arial'],
-      }),
+      expect(save).toHaveBeenLastCalledWith(
+        preferences.pipeline,
+        preferences.providers,
+        {
+          font_families: ['Arial'],
+        },
+        preferences.remote_credentials,
+      ),
     )
   })
 

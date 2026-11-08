@@ -161,6 +161,83 @@ pub(crate) async fn fetch(url: &str, destination: &Path) -> Result<()> {
     activity.finish(destination, result).await
 }
 
+/// Download the named asset from an exact release through GitHub's asset API.
+/// The API resolves the signed storage URL without depending on the browser
+/// download route, which intermediary caches can reject for large runtimes.
+pub(crate) async fn github_release(
+    repo: &str,
+    tag: &str,
+    asset: &str,
+    destination: &Path,
+) -> Result<()> {
+    github_release_from("https://api.github.com", repo, tag, asset, destination).await
+}
+
+async fn github_release_from(
+    api_base: &str,
+    repo: &str,
+    tag: &str,
+    asset: &str,
+    destination: &Path,
+) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Release {
+        assets: Vec<Asset>,
+    }
+    #[derive(Deserialize)]
+    struct Asset {
+        name: String,
+        url: String,
+        size: u64,
+    }
+    let http = network::http()?;
+    let timeout = Duration::from_secs(network::config()?.read_timeout.max(1));
+    let metadata: Release = http
+        .get(format!("{api_base}/repos/{repo}/releases/tags/{tag}"))
+        .timeout(timeout)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let selected = metadata
+        .assets
+        .into_iter()
+        .find(|candidate| candidate.name == asset)
+        .with_context(|| format!("release {repo}@{tag} has no asset {asset}"))?;
+    let client = client(http, network::config()?.max_retries as usize);
+    let activity = Activity::start(asset.to_owned());
+    let result = async {
+        let response = tokio::time::timeout(
+            timeout,
+            client
+                .get(&selected.url)
+                .header(header::ACCEPT, "application/octet-stream")
+                .send(),
+        )
+        .await
+        .context("runtime download request timed out")??
+        .error_for_status()?;
+        ensure!(
+            !response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .is_some_and(|value| value.to_str().unwrap_or("").contains("json")),
+            "GitHub returned metadata instead of runtime bytes"
+        );
+        write_stream(
+            &activity,
+            destination,
+            selected.size,
+            timeout,
+            response.bytes_stream(),
+        )
+        .await
+    }
+    .await;
+    activity.finish(destination, result).await
+}
+
 pub(crate) async fn receive<F, S, B, E>(name: &str, destination: &Path, source: F) -> Result<()>
 where
     F: Future<Output = Result<(Option<u64>, S)>>,
@@ -437,4 +514,55 @@ fn retryable(error: &anyhow::Error) -> bool {
         .find_map(|cause| cause.downcast_ref::<reqwest::Error>())
         .map(|error| error.is_body() || error.is_decode())
         .unwrap_or(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn github_release_streams_named_asset() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let worker = tokio::spawn(async move {
+            for step in 0..2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 2048];
+                let n = stream.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..n]);
+                if step == 0 {
+                    assert!(request.starts_with("GET /repos/koharu-rs/torch/releases/tags/v1 "));
+                    let body = format!(
+                        "{{\"assets\":[{{\"name\":\"cpu.tar.gz\",\"url\":\"http://{address}/assets/1\",\"size\":6}}]}}"
+                    );
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                } else {
+                    assert!(
+                        request.contains("GET /assets/1 ")
+                            && request
+                                .to_ascii_lowercase()
+                                .contains("accept: application/octet-stream")
+                    );
+                    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 6\r\nConnection: close\r\n\r\ntorch!").await.unwrap();
+                }
+            }
+        });
+        let destination = tempfile::NamedTempFile::new().unwrap();
+        github_release_from(
+            &format!("http://{address}"),
+            "koharu-rs/torch",
+            "v1",
+            "cpu.tar.gz",
+            destination.path(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(destination.path()).unwrap(), b"torch!");
+        worker.await.unwrap();
+    }
 }

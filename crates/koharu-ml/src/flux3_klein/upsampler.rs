@@ -161,6 +161,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the dynamically loaded llama.cpp runtime"]
     fn the_image_precedes_the_request_in_the_user_turn() {
         let [system, user] = messages("SYSTEM", "Erase the lettering.");
         assert_eq!(system, ChatMessage::system("SYSTEM"));

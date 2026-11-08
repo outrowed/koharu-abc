@@ -38,10 +38,7 @@ mod tests {
     use super::*;
 
     #[test]
-    #[cfg_attr(
-        windows,
-        ignore = "Windows resolves LibTorch only once Runtime::initialize preloads it"
-    )]
+    #[ignore = "requires the dynamically loaded LibTorch runtime"]
     fn a_non_archive_file_fails_with_the_path_in_the_message() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("not-an-archive.pt");

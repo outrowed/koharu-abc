@@ -141,11 +141,20 @@ impl StageProcessor for Processor {
         Translator::model(&self.config.model)
     }
 
+    fn is_remote(&self) -> bool {
+        self.config.model.provider != koharu_translator::Provider::Local
+    }
+
     fn unload(&self) -> bool {
         self.translator.unload()
     }
 
     async fn load(&self) -> Result<()> {
+        if !self.is_remote() {
+            koharu_ml::init_llama().await.map_err(|error| {
+                error.context("failed to initialize local ML runtime for translation")
+            })?;
+        }
         self.translator.load_model(&self.config.model).await
     }
 

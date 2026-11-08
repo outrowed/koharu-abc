@@ -785,7 +785,8 @@ mod tests {
     #[test]
     fn a_stretch_pattern_reports_the_stretch_repeat() {
         let style = pattern_style(PatternRepeat::Stretch);
-        let Some(PreparedFill::Pattern { pattern, .. }) = fill(&style, frame(40.0, 20.0, 0.0), false)
+        let Some(PreparedFill::Pattern { pattern, .. }) =
+            fill(&style, frame(40.0, 20.0, 0.0), false)
         else {
             panic!("expected a pattern fill");
         };

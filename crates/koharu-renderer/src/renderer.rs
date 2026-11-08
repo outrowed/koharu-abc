@@ -296,7 +296,8 @@ impl Renderer {
                 // the same loader as any other image, so its blob belongs in the
                 // request set too. Omitting it would leave the brush with
                 // `None` and silently paint the fallback forever.
-                NodeDescriptor::Shape(shape) => shape.pattern,                NodeDescriptor::Text(_) => None,
+                NodeDescriptor::Shape(shape) => shape.pattern,
+                NodeDescriptor::Text(_) => None,
             })
             .collect::<BTreeSet<_>>();
         let images = Arc::new(self.load_images(snapshot, image_ids).await?);
@@ -927,10 +928,7 @@ impl Traversal<'_> {
         // it as a dependency is what makes an uploaded pattern rebuild the node
         // instead of leaving the previous fallback colour on screen (P-D6).
         let pattern_role = AssetRole::new("pattern")?;
-        let pattern = if matches!(
-            shape.style.fill,
-            Some(koharu_scene::ShapeFill::Pattern(_))
-        ) {
+        let pattern = if matches!(shape.style.fill, Some(koharu_scene::ShapeFill::Pattern(_))) {
             let asset = self.snapshot.asset(entity, &pattern_role)?;
             dependencies.insert(RenderDependency::Component {
                 entity,
@@ -2207,14 +2205,7 @@ mod tests {
         geometry: &Geometry,
         angle_degrees: Option<f32>,
     ) -> koharu_scene::Result<EntityId> {
-        add_shape_layer_styled(
-            edit,
-            page,
-            shape,
-            geometry,
-            angle_degrees,
-            ellipse_style(),
-        )
+        add_shape_layer_styled(edit, page, shape, geometry, angle_degrees, ellipse_style())
     }
 
     /// `add_shape_layer` with an explicit style, so a test can install a
@@ -2257,12 +2248,8 @@ mod tests {
         // A 2x1 red/blue PNG, so the pixels are identifiable after decoding.
         let png = {
             let mut bytes = std::io::Cursor::new(Vec::new());
-            let image = image::RgbaImage::from_raw(
-                2,
-                1,
-                vec![255, 0, 0, 255, 0, 0, 255, 255],
-            )
-            .unwrap();
+            let image =
+                image::RgbaImage::from_raw(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 255]).unwrap();
             image::DynamicImage::ImageRgba8(image)
                 .write_to(&mut bytes, image::ImageFormat::Png)
                 .unwrap();
@@ -2407,7 +2394,8 @@ mod tests {
     /// A 45°-rotated rx=50/ry=25 ellipse sampled as 32 points, centred at
     /// (100, 100). Its authored frame is 100×50 but its axis-aligned box is
     /// 79.06², so the angle is observable in both the frame and the bounds.
-    fn rotated_ellipse() -> Geometry {        let (rx, ry) = (50.0_f64, 25.0_f64);
+    fn rotated_ellipse() -> Geometry {
+        let (rx, ry) = (50.0_f64, 25.0_f64);
         let (sin, cos) = (45.0_f64).to_radians().sin_cos();
         Geometry {
             origin: Origin::User,

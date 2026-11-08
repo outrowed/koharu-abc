@@ -85,7 +85,9 @@ impl AcceleratorPermit {
 /// logs. The requesting stage is never a target: keeping it resident lets the
 /// next page of the same stage reuse its cell without reloading.
 fn eviction_targets(requested: Stage) -> impl Iterator<Item = Stage> {
-    Stage::ALL.into_iter().filter(move |stage| *stage != requested)
+    Stage::ALL
+        .into_iter()
+        .filter(move |stage| *stage != requested)
 }
 
 /// Drops every other stage's model so that only `requested` may hold one. The

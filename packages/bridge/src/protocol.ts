@@ -253,8 +253,21 @@ export const commands = {
 		pipeline: PipelineConfig,
 		providers: ProviderPreferences,
 		typesetting: TypesettingConfig,
-	) => put<Preferences>("/config", { pipeline, providers, typesetting }),
+		remoteCredentials: RemoteCredentials,
+	) => put<Preferences>("/config", {
+		pipeline,
+		providers,
+		typesetting,
+		remote_credentials: remoteCredentials,
+	}),
 	getPreferences: () => get<Preferences>("/config"),
+	getServer: () => get<ServerStatus>("/server"),
+	updateServer: (config: ServerConfig) => put<ServerStatus>("/server", config),
+	unloadServer: () => post<ServerStatus>("/server/unload"),
+	warmupServer: (stage: 'detection' | 'ocr' | 'inpainting') =>
+		post<ServerStatus>("/server/warmup", { stage }),
+	testEndpoint: (stage: 'detection' | 'ocr' | 'inpainting', endpoint: RemoteEndpointConfig) =>
+		post<EndpointTestResult>("/endpoints/test", { stage, endpoint }),
 	getTranslationModels: () => get<Model[]>("/translation-models"),
 	getLlmCapabilities: () => get<LlmCapabilities>("/llm/capabilities"),
 	// The picker runs in the server process, so it only makes sense for a
@@ -1016,6 +1029,23 @@ export type PaintBrush = {
 	ramp: BrushRamp | null,
 };
 
+export type RemoteEndpointConfig = {
+	base_url?: string | null,
+	model?: string | null,
+	timeout_seconds: number,
+	max_response_mib: number,
+};
+
+export type StageExecution =
+	| { mode: "local" }
+	| ({ mode: "remote" } & RemoteEndpointConfig);
+
+export type RemotePipelineConfig = {
+	detection: StageExecution,
+	ocr: StageExecution,
+	inpainting: StageExecution,
+};
+
 export type PipelineConfig = {
 	detection: DetectionModel,
 	ocr: OcrModel,
@@ -1026,6 +1056,7 @@ export type PipelineConfig = {
 	 *  The active stage fields above only select which profile is used.
 	 */
 	processor: ProcessorConfig,
+	remote?: RemotePipelineConfig,
 };
 
 export type Point = {
@@ -1037,7 +1068,43 @@ export type Preferences = {
 	pipeline: PipelineConfig,
 	providers: ProviderPreferences,
 	typesetting: TypesettingConfig,
+	remote_credentials: RemoteCredentials,
 	languages: LanguageChoice[],
+};
+
+export type RemoteCredentials = {
+	detection: CredentialInput,
+	ocr: CredentialInput,
+	inpainting: CredentialInput,
+};
+
+export type ServerConfig = {
+	enabled: boolean,
+	require_api_token: boolean,
+	cpu: boolean,
+	features: { detection: boolean, ocr: boolean, inpainting: boolean },
+	detection: DetectionModel,
+	ocr: OcrModel,
+	inpainting: InpaintingModel,
+	max_request_mib: number,
+	max_image_pixels: number,
+	max_queue: number,
+};
+
+export type ServerStatus = {
+	config: ServerConfig,
+	active: 'detection' | 'ocr' | 'inpainting' | null,
+	loaded: 'detection' | 'ocr' | 'inpainting' | null,
+	queued: number,
+	completed: number,
+	failed: number,
+	last_error: string | null,
+};
+
+export type EndpointTestResult = {
+	reachable: boolean,
+	models: string[],
+	message: string,
 };
 
 /**

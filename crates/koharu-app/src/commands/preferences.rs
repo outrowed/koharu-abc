@@ -15,6 +15,33 @@ pub struct Preferences {
     pub providers: ProviderPreferences,
     pub typesetting: TypesettingConfig,
     pub languages: Vec<LanguageChoice>,
+    pub remote_credentials: RemoteCredentials,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Type)]
+pub struct RemoteCredentials {
+    pub detection: CredentialInput,
+    pub ocr: CredentialInput,
+    pub inpainting: CredentialInput,
+}
+
+impl RemoteCredentials {
+    fn load() -> Result<Self> {
+        use koharu_pipeline::remote;
+        Ok(Self {
+            detection: CredentialInput::load(remote::detection_secret_key())?,
+            ocr: CredentialInput::load(remote::ocr_secret_key())?,
+            inpainting: CredentialInput::load(remote::inpainting_secret_key())?,
+        })
+    }
+
+    fn save(self) -> Result<()> {
+        use koharu_pipeline::remote;
+        self.detection.save(remote::detection_secret_key())?;
+        self.ocr.save(remote::ocr_secret_key())?;
+        self.inpainting.save(remote::inpainting_secret_key())?;
+        Ok(())
+    }
 }
 
 impl Preferences {
@@ -29,6 +56,7 @@ impl Preferences {
             pipeline: pipeline.clone(),
             providers: ProviderPreferences::from_config(&providers)?,
             typesetting: typesetting.clone(),
+            remote_credentials: RemoteCredentials::load()?,
             languages: Language::ALL
                 .iter()
                 .map(|language| LanguageChoice {
@@ -123,10 +151,15 @@ impl fmt::Debug for CredentialInput {
 
 impl CredentialInput {
     fn load(key: koharu_secrets::SecretKey<'_>) -> Result<Self> {
+        let managed_by_env = koharu_secrets::is_read_only()
+            || key.environment_variable().is_some_and(|variable| {
+                std::env::var_os(variable)
+                    .is_some_and(|value| !value.to_string_lossy().trim().is_empty())
+            });
         Ok(Self {
             configured: koharu_secrets::get(key)?.is_some(),
-            editable: !koharu_secrets::is_read_only(),
-            environment_variable: koharu_secrets::is_read_only()
+            editable: !managed_by_env,
+            environment_variable: managed_by_env
                 .then(|| key.environment_variable().map(str::to_owned))
                 .flatten(),
             value: None,
@@ -135,7 +168,12 @@ impl CredentialInput {
     }
 
     fn save(self, key: koharu_secrets::SecretKey<'_>) -> Result<()> {
-        if koharu_secrets::is_read_only() {
+        let managed_by_env = koharu_secrets::is_read_only()
+            || key.environment_variable().is_some_and(|variable| {
+                std::env::var_os(variable)
+                    .is_some_and(|value| !value.to_string_lossy().trim().is_empty())
+            });
+        if managed_by_env {
             if self.clear || self.value.is_some() {
                 anyhow::bail!(
                     "{} is managed by the environment and cannot be changed from Koharu",
@@ -169,6 +207,7 @@ pub async fn save_preferences(
     mut pipeline: PipelineConfig,
     providers: ProviderPreferences,
     typesetting: TypesettingConfig,
+    remote_credentials: RemoteCredentials,
 ) -> std::result::Result<Preferences, Error> {
     remember_pipeline_profiles(&mut pipeline);
     // 다른 설정과 마찬가지로 저장 시점에 거른다. 여기서 걸리지 않으면 잘못된
@@ -176,6 +215,7 @@ pub async fn save_preferences(
     // 모델을 로드할 때가 되어서야 드러난다.
     pipeline.validate()?;
     let providers = providers.into_config()?;
+    remote_credentials.save()?;
     let pipeline_config = PipelineConfig::load()?;
     let providers_config = ProvidersConfig::load()?;
     let typesetting_config = TypesettingConfig::load()?;

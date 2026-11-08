@@ -555,7 +555,7 @@
       "title": "로컬 모델"
     },
     "pipeline": {
-      "description": "각 페이지 처리에 사용할 모델과 옵션을 선택합니다.",
+      "description": "비전 및 인페인팅 스테이지(검출, OCR, 인페인팅)의 실행 방식(로컬 가속기 또는 원격 엔드포인트)과 모델 옵션을 설정합니다. 번역 모델 및 연결은 번역 및 제공자 탭에서 구성됩니다.",
       "modelLabel": "{{stage}} 모델",
       "options": {
         "bubbleThreshold": "말풍선 임곗값",
@@ -622,7 +622,29 @@
           "title": "OCR"
         }
       },
-      "title": "파이프라인"
+      "title": "파이프라인",
+      "endpoint": {
+        "mode": "실행 엔드포인트",
+        "local": "로컬",
+        "remote": "원격",
+        "localDescription": "로컬 가속기 또는 CPU를 사용하여 직접 추론을 실행합니다.",
+        "remoteDescription": "인증된 OpenAI 호환 또는 Koharu HTTP 추론 서버로 요청을 전달합니다.",
+        "remoteModeLabel": "{{stage}} 실행 모드",
+        "baseUrl": "기본 URL",
+        "modelOverride": "모델 오버라이드 (선택 사항)",
+        "timeout": "요청 타임아웃 (초)",
+        "responseLimit": "최대 응답 크기 (MiB)",
+        "test": "연결 테스트",
+        "testing": "테스트 중…",
+        "testFailed": "연결 테스트 실패",
+        "validation": {
+          "missingUrl": "기본 URL을 입력해 주세요 (예: http://host:8000/v1).",
+          "invalidUrl": "URL은 http:// 또는 https:// 형식이어야 하며 쿼리나 인증 정보는 포함할 수 없습니다.",
+          "invalidLimits": "타임아웃(1~3600초) 및 최대 응답 크기(1~256MiB)를 확인해 주세요.",
+          "incompleteStage": "{{stage}} 원격 엔드포인트 설정이 완료되지 않았습니다. 기본 URL을 확인해 주세요."
+        },
+        "savedCredentialHint": "저장된 API 키로 테스트됩니다."
+      }
     },
     "providers": {
       "clearCredential": "{{provider}} 자격 증명 지우기",
@@ -649,7 +671,8 @@
       "providers": "제공자",
       "shortcuts": "단축키",
       "translation": "번역",
-      "typesetting": "조판"
+      "typesetting": "조판",
+      "server": "서버"
     },
     "title": "설정",
     "translation": {
@@ -662,7 +685,7 @@
       "instructionsPlaceholder": "프로젝트 전체에 적용할 선택적 지침",
       "maxPagesPerRequest": "요청당 최대 페이지 수",
       "model": "모델",
-      "modelDescription": "제공자 레이블은 각 모델의 실행 위치를 나타내며 연결은 별도로 설정합니다.",
+      "modelDescription": "텍스트 번역 모델을 선택합니다. LLM 및 번역 공급자의 엔드포인트 및 API 키는 제공자 탭에서 구성되며, 비전 및 인페인팅 엔드포인트와 분리되어 관리됩니다.",
       "modelQuantization": "모델 양자화",
       "output": "출력",
       "quantization": "양자화",
@@ -685,7 +708,48 @@
       "loadingFonts": "글꼴 불러오는 중…",
       "removeFamily": "{{family}} 삭제",
       "title": "조판"
-    }
+    },
+    "server": {
+      "title": "서버",
+      "description": "원격 요청을 처리하도록 통합 코어 추론 서버를 구성합니다.",
+      "status": "서버 상태",
+      "statusDescription": "현재 추론 엔진 상태 및 실행 카운터입니다.",
+      "currentStatus": "런타임 상태",
+      "statusCounters": "대기 중: {{queued}} · 완료: {{completed}} · 실패: {{failed}}",
+      "lastError": "마지막 오류: {{error}}",
+      "activeStage": "실행 중: {{stage}}",
+      "idle": "대기 중",
+      "loadedModel": "로드된 모델: {{loaded}}",
+      "none": "없음",
+      "refresh": "새로고침",
+      "unload": "모델 언로드",
+      "warmup": "스테이지 워밍업",
+      "warmupDescription": "요청 전에 스테이지 모델을 가속기 메모리에 미리 로드합니다.",
+      "configuration": "서버 설정",
+      "configurationDescription": "추론 리스너 동작, 보안 및 하드웨어 제한입니다.",
+      "enabled": "원격 추론 수락",
+      "enabledDescription": "외부 클라이언트가 비전 및 인페인팅 작업을 요청할 수 있도록 허용합니다.",
+      "requireToken": "API 토큰 필수",
+      "requireTokenDescription": "원격 추론 요청 시 애플리케이션 API 토큰을 Bearer 인증으로 요구합니다.",
+      "cpu": "CPU 강제 실행",
+      "cpuDescription": "가속기가 사용 가능하더라도 서버 모델을 CPU에서 실행합니다.",
+      "features": "활성화된 스테이지",
+      "featuresDescription": "서버가 클라이언트에 노출할 파이프라인 기능을 선택합니다.",
+      "limits": "요청 제한",
+      "limitsDescription": "최대 요청 페이로드, 이미지 크기 및 큐 용량을 설정합니다.",
+      "maxRequestMib": "최대 요청 크기 (MiB)",
+      "maxImagePixels": "최대 이미지 픽셀",
+      "maxQueue": "최대 큐 대기 수",
+      "models": "서버 모델",
+      "modelsDescription": "서버 추론 전용으로 사용되는 모델을 선택하고 구성합니다.",
+      "apply": "설정 적용",
+      "applying": "적용 중…",
+      "loadFailed": "서버 상태를 불러오지 못했습니다.",
+      "applyFailed": "서버 설정을 적용하지 못했습니다.",
+      "unloadFailed": "서버 모델을 언로드하지 못했습니다.",
+      "warmupFailed": "모델 워밍업에 실패했습니다."
+    },
+    "saveFailed": "설정을 저장하지 못했습니다."
   },
   "start": {
     "create": "만들기",

@@ -65,6 +65,9 @@ impl StageInput {
 #[async_trait]
 trait StageProcessor: Send + Sync {
     fn model(&self) -> &'static str;
+    fn is_remote(&self) -> bool {
+        false
+    }
     fn skip(&self, _input: &StageInput) -> Result<bool> {
         Ok(false)
     }
@@ -90,12 +93,26 @@ impl Stages {
         if config.translation.max_pages_per_request == 0 {
             anyhow::bail!("maximum pages per translation request must be at least one");
         }
+        config.remote.validate()?;
+        let client = crate::remote::http_client()?;
         Ok(Self {
-            detection: detection::Processor::new(config.detection()?, device.clone()),
-            ocr: ocr::Processor::new(config.ocr.clone(), device.clone()),
+            detection: detection::Processor::new(
+                config.detection()?,
+                config.remote.detection.clone(),
+                client.clone(),
+                device.clone(),
+            ),
+            ocr: ocr::Processor::new(
+                config.ocr()?,
+                config.remote.ocr.clone(),
+                client.clone(),
+                device.clone(),
+            ),
             translation: translation::Processor::new(config.translation.clone(), translator),
             inpainting: inpainting::Processor::new(
                 config.inpainting()?,
+                config.remote.inpainting.clone(),
+                client,
                 device.clone(),
                 resources,
             )?,
@@ -113,6 +130,10 @@ impl Stages {
 
     pub(crate) fn model(&self, stage: Stage) -> &'static str {
         self.processor(stage).model()
+    }
+
+    pub(crate) fn is_remote(&self, stage: Stage) -> bool {
+        self.processor(stage).is_remote()
     }
 
     pub(crate) fn skip(&self, stage: Stage, input: &StageInput) -> Result<bool> {
@@ -137,6 +158,35 @@ impl Stages {
 
     pub(crate) fn unload(&self, stage: Stage) -> bool {
         self.processor(stage).unload()
+    }
+
+    pub(crate) async fn detect(
+        &self,
+        image: image::DynamicImage,
+        text: Option<f32>,
+        bubble: Option<f32>,
+        panel: Option<f32>,
+    ) -> Result<koharu_ml::koharu_layout_rfdetr_seg_2xl::KoharuLayoutDetections> {
+        self.detection.infer(image, text, bubble, panel).await
+    }
+    pub(crate) async fn ocr(
+        &self,
+        images: Vec<(String, image::DynamicImage)>,
+    ) -> Result<Vec<(String, String)>> {
+        self.ocr.infer(images).await
+    }
+    pub(crate) async fn inpaint(
+        &self,
+        image: image::DynamicImage,
+        mask: image::GrayImage,
+        options: crate::inference::InpaintOptions,
+    ) -> Result<image::DynamicImage> {
+        self.inpainting.infer(image, mask, options).await
+    }
+    pub(crate) fn unload_all(&self) {
+        for stage in Stage::ALL {
+            self.unload(stage);
+        }
     }
 }
 

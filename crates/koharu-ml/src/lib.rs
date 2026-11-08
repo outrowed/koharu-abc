@@ -40,9 +40,10 @@ pub use koharu_llama as llama;
 pub use koharu_runtime::{Backend, Device, DeviceType};
 pub use koharu_torch as torch;
 
+static TORCH: OnceCell<()> = OnceCell::const_new();
 static LLAMA: OnceCell<LlamaBackend> = OnceCell::const_new();
 static DIFFUSION: OnceCell<()> = OnceCell::const_new();
-static READY: OnceCell<Device> = OnceCell::const_new();
+static READY: std::sync::OnceLock<Device> = std::sync::OnceLock::new();
 
 /// Initializes every process-wide native runtime used by Koharu.
 ///
@@ -51,31 +52,55 @@ static READY: OnceCell<Device> = OnceCell::const_new();
 /// again. Retry timing belongs to the application bootstrap rather than this
 /// deterministic, single-attempt API.
 #[tracing::instrument(skip_all)]
-pub async fn init() -> anyhow::Result<()> {
-    READY
+pub async fn init_torch() -> anyhow::Result<()> {
+    TORCH
         .get_or_try_init(|| async {
-            let runtime = Runtime::discover([Feature::Torch, Feature::Llama, Feature::Diffusion])?;
-            let device = runtime
+            let initialized = Runtime::discover([Feature::Torch])?
                 .initialize()
                 .await
-                .context("failed to initialize runtimes")?;
-
-            LLAMA
-                .get_or_try_init(|| async {
-                    koharu_llama::send_logs_to_tracing(koharu_llama::LogOptions::default());
-                    LlamaBackend::init().context("failed to initialize llama.cpp backend")
-                })
-                .await?;
-            DIFFUSION
-                .get_or_try_init(|| async {
-                    koharu_diffusion::send_logs_to_tracing()
-                        .context("failed to redirect stable-diffusion.cpp logs")?;
-                    Ok::<(), anyhow::Error>(())
-                })
-                .await?;
-            Ok::<Device, anyhow::Error>(device)
+                .context("failed to initialize Torch runtime")?;
+            let _ = READY.set(initialized);
+            Ok::<(), anyhow::Error>(())
         })
         .await?;
+    Ok(())
+}
+
+pub async fn init_llama() -> anyhow::Result<()> {
+    LLAMA
+        .get_or_try_init(|| async {
+            let device = Runtime::discover([Feature::Llama])?
+                .initialize()
+                .await
+                .context("failed to initialize llama.cpp runtime")?;
+            let _ = READY.set(device);
+            koharu_llama::send_logs_to_tracing(koharu_llama::LogOptions::default());
+            LlamaBackend::init().context("failed to initialize llama.cpp backend")
+        })
+        .await?;
+    Ok(())
+}
+
+pub async fn init_diffusion() -> anyhow::Result<()> {
+    DIFFUSION
+        .get_or_try_init(|| async {
+            let device = Runtime::discover([Feature::Diffusion])?
+                .initialize()
+                .await
+                .context("failed to initialize stable-diffusion.cpp runtime")?;
+            let _ = READY.set(device);
+            koharu_diffusion::send_logs_to_tracing()
+                .context("failed to redirect stable-diffusion.cpp logs")?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await?;
+    Ok(())
+}
+
+pub async fn init() -> anyhow::Result<()> {
+    init_torch().await?;
+    init_llama().await?;
+    init_diffusion().await?;
     Ok(())
 }
 

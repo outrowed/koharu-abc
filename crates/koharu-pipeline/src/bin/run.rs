@@ -1,10 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    fs,
-    path::PathBuf,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{collections::BTreeMap, fs, path::PathBuf, sync::Arc, time::Instant};
 
 use anyhow::{Context as _, Result};
 use clap::{Parser, ValueEnum};
@@ -160,6 +154,7 @@ impl Arguments {
                 }
             },
             processor: Default::default(),
+            remote: Default::default(),
         }
     }
 }
@@ -168,13 +163,12 @@ impl Arguments {
 async fn main() -> Result<()> {
     let arguments = Arguments::parse();
     init_tracing();
-    initialize_with_retry().await;
 
     let mut session = Session::memory().await?;
     let mut pages = Vec::with_capacity(arguments.input.len());
     for input in &arguments.input {
-        let source = fs::read(input)
-            .with_context(|| format!("failed to read {}", input.display()))?;
+        let source =
+            fs::read(input).with_context(|| format!("failed to read {}", input.display()))?;
         let decoded = image::load_from_memory(&source).context("failed to decode input image")?;
         let name = input
             .file_name()
@@ -289,27 +283,6 @@ fn init_tracing() {
     .expect("failed to set the global tracing subscriber");
 }
 
-async fn initialize_with_retry() {
-    let mut delay = Duration::from_secs(1);
-    let mut attempt = 0_u64;
-    loop {
-        attempt += 1;
-        match koharu_ml::init().await {
-            Ok(()) => return,
-            Err(error) => {
-                let jitter = Duration::from_millis((attempt.wrapping_mul(137)) % 251);
-                let wait = delay + jitter;
-                eprintln!(
-                    "runtime initialization attempt {attempt} failed: {error}; retrying in {:.1}s",
-                    wait.as_secs_f64()
-                );
-                tokio::time::sleep(wait).await;
-                delay = delay.saturating_mul(2).min(Duration::from_secs(30));
-            }
-        }
-    }
-}
-
 fn image_media_type(path: &std::path::Path) -> &'static str {
     match path
         .extension()
@@ -354,13 +327,7 @@ mod tests {
     #[test]
     fn several_inputs_are_accepted_for_one_output_directory() {
         let arguments = Arguments::try_parse_from([
-            "run",
-            "--input",
-            "one.jpg",
-            "--input",
-            "two.jpg",
-            "--output",
-            "rendered",
+            "run", "--input", "one.jpg", "--input", "two.jpg", "--output", "rendered",
         ])
         .unwrap();
         assert_eq!(

@@ -15,9 +15,9 @@ use crate::{
     Bounds, CompositionCommand, Error, FillRule, LayerId, LayerKind, PathElement, PreparedContent,
     PreparedElementFrame, PreparedFill, PreparedFrame, PreparedFrameBundle, PreparedFrameManifest,
     PreparedGradient, PreparedGradientExtend, PreparedGradientKind, PreparedLineCap,
-    PreparedLineJoin, PreparedPath, PreparedPatternRepeat, PreparedResource,
-    PreparedResourceStore, PreparedScene, PreparedSceneCommand, PreparedStroke, Presentation,
-    RasterDraw, ResourceId, Result, Revision,
+    PreparedLineJoin, PreparedPath, PreparedPatternRepeat, PreparedResource, PreparedResourceStore,
+    PreparedScene, PreparedSceneCommand, PreparedStroke, Presentation, RasterDraw, ResourceId,
+    Result, Revision,
 };
 
 #[derive(Clone)]
@@ -536,9 +536,11 @@ impl PreparedPath {
                 //
                 // The fallback must not `return`: a shape with both a fill and a
                 // stroke still has to draw its stroke.
-                match pattern.image.as_ref().filter(|image| {
-                    image.width > 0 && image.height > 0
-                }) {
+                match pattern
+                    .image
+                    .as_ref()
+                    .filter(|image| image.width > 0 && image.height > 0)
+                {
                     None => {
                         scene.fill(fill(rule), affine, rgba(pattern.fallback), None, &path);
                     }

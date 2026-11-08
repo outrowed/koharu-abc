@@ -3,11 +3,55 @@ use koharu_translator::{GenerationConfig, Language};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use specta::Type;
 
-use crate::stages::{
-    Flux2KleinConfig, Flux3KleinConfig, KoharuLayoutRFDetrSeg2XLConfig, LaMaConfig,
-    MangaInpaintorConfig, MiGanConfig, PaddleOcrVl1_6MangaLoraConfig, PowerPaintConfig,
-    RoremMixedConfig,
+use crate::{
+    remote::{RemoteEndpointConfig, StageExecution},
+    stages::{
+        Flux2KleinConfig, Flux3KleinConfig, KoharuLayoutRFDetrSeg2XLConfig, LaMaConfig,
+        MangaInpaintorConfig, MiGanConfig, PaddleOcrVl1_6MangaLoraConfig, PowerPaintConfig,
+        RoremMixedConfig,
+    },
 };
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(default)]
+pub struct RemotePipelineConfig {
+    pub detection: StageExecution,
+    pub ocr: StageExecution,
+    pub inpainting: StageExecution,
+}
+
+impl RemotePipelineConfig {
+    pub fn validate(&self) -> Result<()> {
+        self.detection.validate("Detection")?;
+        self.ocr.validate("OCR")?;
+        self.inpainting.validate("Inpainting")?;
+        Ok(())
+    }
+
+    #[must_use]
+    pub const fn detection_endpoint(&self) -> Option<&RemoteEndpointConfig> {
+        match &self.detection {
+            StageExecution::Local => None,
+            StageExecution::Remote(config) => Some(config),
+        }
+    }
+
+    #[must_use]
+    pub const fn ocr_endpoint(&self) -> Option<&RemoteEndpointConfig> {
+        match &self.ocr {
+            StageExecution::Local => None,
+            StageExecution::Remote(config) => Some(config),
+        }
+    }
+
+    #[must_use]
+    pub const fn inpainting_endpoint(&self) -> Option<&RemoteEndpointConfig> {
+        match &self.inpainting {
+            StageExecution::Local => None,
+            StageExecution::Remote(config) => Some(config),
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Type)]
 pub struct PipelineConfig {
@@ -18,6 +62,8 @@ pub struct PipelineConfig {
     /// Settings for every model are kept independently of the active model.
     /// The active stage fields above only select which profile is used.
     pub processor: ProcessorConfig,
+    #[specta(optional)]
+    pub remote: RemotePipelineConfig,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -29,6 +75,8 @@ struct PipelineFile {
     inpainting: ModelSelection,
     #[serde(default)]
     processor: ProcessorConfig,
+    #[serde(default)]
+    remote: RemotePipelineConfig,
 }
 
 impl Default for PipelineFile {
@@ -45,6 +93,7 @@ impl Default for PipelineFile {
                 model: "lama".to_owned(),
             },
             processor: ProcessorConfig::default(),
+            remote: RemotePipelineConfig::default(),
         }
     }
 }
@@ -129,6 +178,7 @@ impl Serialize for PipelineConfig {
                 model: inpainting.to_owned(),
             },
             processor,
+            remote: self.remote.clone(),
         }
         .serialize(serializer)
     }
@@ -202,6 +252,7 @@ impl<'de> Deserialize<'de> for PipelineConfig {
             translation: file.translation,
             inpainting,
             processor: file.processor,
+            remote: file.remote,
         })
     }
 }
@@ -216,6 +267,7 @@ impl Default for PipelineConfig {
             translation: TranslationConfig::default(),
             inpainting: InpaintingModel::LaMa(LaMaConfig::default()),
             processor: ProcessorConfig::default(),
+            remote: RemotePipelineConfig::default(),
         }
     }
 }
@@ -334,8 +386,13 @@ impl PipelineConfig {
     /// Face 오버라이드 같은 실수는 모델을 로드할 때가 아니라 저장할 때 보고된다.
     /// 검사 규칙은 모델을 만드는 쪽(`InpaintingModel::validate`)과 같다.
     pub fn validate(&self) -> Result<()> {
-        self.inpainting()?.validate()?;
-        if let OcrModel::PaddleOcrVl1_6MangaLora(config) = self.ocr()? {
+        self.remote.validate()?;
+        if !self.remote.inpainting.is_remote() {
+            self.inpainting()?.validate()?;
+        }
+        if !self.remote.ocr.is_remote()
+            && let OcrModel::PaddleOcrVl1_6MangaLora(config) = self.ocr()?
+        {
             config.validate()?;
         }
         Ok(())
@@ -739,6 +796,7 @@ mod tests {
                 ..Default::default()
             }),
             processor: ProcessorConfig::default(),
+            remote: RemotePipelineConfig::default(),
         };
         let document = toml::to_string(&config).unwrap();
         assert!(document.contains("[detection]\nmodel = \"koharu-layout-rfdetr-seg-2xl\""));

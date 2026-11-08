@@ -931,15 +931,14 @@ impl PreparedPattern {
             // caller's single `fill` call uniform rather than branching here.
             return Affine::IDENTITY;
         };
-        let degrees = f64::from(self.rotation_degrees);        match self.repeat {
+        let degrees = f64::from(self.rotation_degrees);
+        match self.repeat {
             PreparedPatternRepeat::Tile => {
                 // Image pixel (0,0) lands on the tile origin, and one pixel
                 // spans `scale` path-local units, so `scale` is the pitch the
                 // author set. Applied scale -> rotate -> translate.
-                Affine::translate((
-                    f64::from(self.origin[0]),
-                    f64::from(self.origin[1]),
-                )) * Affine::rotate(degrees.to_radians())
+                Affine::translate((f64::from(self.origin[0]), f64::from(self.origin[1])))
+                    * Affine::rotate(degrees.to_radians())
                     * Affine::scale(f64::from(self.scale))
             }
             PreparedPatternRepeat::Stretch => {
@@ -1536,7 +1535,8 @@ mod tests {
         assert_eq!(&decoded.pixels[..], &[1, 2, 3, 4]);
     }
 
-    fn prepared_pattern() -> PreparedPattern {        PreparedPattern {
+    fn prepared_pattern() -> PreparedPattern {
+        PreparedPattern {
             repeat: PreparedPatternRepeat::Tile,
             origin: [1.0, 2.0],
             scale: 4.0,

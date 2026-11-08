@@ -379,6 +379,7 @@ fn encode_source_image(image: RgbaImage) -> Result<Vec<u8>> {
 /// This returns a scene result rather than `anyhow::Result` because it runs
 /// inside [`Snapshot::patch`], whose closure is typed by the scene crate; PNG
 /// encoding, which is not, stays in [`encode_source_image`].
+#[allow(clippy::too_many_arguments)]
 fn write_source_image(
     edit: &mut Edit,
     entity: EntityId,

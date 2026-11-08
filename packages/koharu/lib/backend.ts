@@ -2,9 +2,14 @@
 
 import { commands } from '@koharu/bridge/protocol'
 import type {
+  EndpointTestResult,
   PipelineConfig,
   Preferences,
   ProviderPreferences,
+  RemoteCredentials,
+  RemoteEndpointConfig,
+  ServerConfig,
+  ServerStatus,
   TypesettingConfig,
 } from '@koharu/bridge/protocol'
 
@@ -46,16 +51,40 @@ export function savePreferences(
   pipeline: PipelineConfig,
   providers: ProviderPreferences,
   typesetting: TypesettingConfig,
+  remoteCredentials: RemoteCredentials,
 ): Promise<Preferences> {
   preferencesWriteGeneration += 1
   const pending = preferencesWriteQueue
     .catch(() => undefined)
-    .then(() => call(commands.savePreferences, pipeline, providers, typesetting))
+    .then(() => call(commands.savePreferences, pipeline, providers, typesetting, remoteCredentials))
   preferencesWriteQueue = pending.then(
     () => undefined,
     () => undefined,
   )
   return pending
+}
+
+export function getServer(): Promise<ServerStatus> {
+  return call(commands.getServer)
+}
+
+export function updateServer(config: ServerConfig): Promise<ServerStatus> {
+  return call(commands.updateServer, config)
+}
+
+export function unloadServer(): Promise<ServerStatus> {
+  return call(commands.unloadServer)
+}
+
+export function warmupServer(stage: 'detection' | 'ocr' | 'inpainting'): Promise<ServerStatus> {
+  return call(commands.warmupServer, stage)
+}
+
+export function testEndpoint(
+  stage: 'detection' | 'ocr' | 'inpainting',
+  endpoint: RemoteEndpointConfig,
+): Promise<EndpointTestResult> {
+  return call(commands.testEndpoint, stage, endpoint)
 }
 
 export function refreshTranslationModels(force = false): Promise<void> {
