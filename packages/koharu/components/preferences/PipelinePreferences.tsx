@@ -1,6 +1,7 @@
 'use client'
 
 import { Eraser, FileText, Search } from 'lucide-react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { Flux2KleinOptions } from '@/components/preferences/Flux2KleinOptions'
@@ -8,7 +9,6 @@ import { Flux3KleinOptions } from '@/components/preferences/Flux3KleinOptions'
 import { LaMaOptions } from '@/components/preferences/LaMaOptions'
 import { MangaInpaintorOptions } from '@/components/preferences/MangaInpaintorOptions'
 import { MiGanOptions } from '@/components/preferences/MiGanOptions'
-import { PowerPaintOptions } from '@/components/preferences/PowerPaintOptions'
 import {
   defaultModel,
   modelNames,
@@ -19,6 +19,7 @@ import {
   type ModelStage,
   type PipelineModel,
 } from '@/components/preferences/models'
+import { PowerPaintOptions } from '@/components/preferences/PowerPaintOptions'
 import {
   NumberField,
   PreferencePage,
@@ -26,7 +27,17 @@ import {
   PreferenceSection,
   TextField,
 } from '@/components/preferences/PreferenceFields'
-import type { PipelineConfig } from '@koharu/bridge/protocol'
+import { CredentialField } from '@/components/preferences/ProviderPreferences'
+import { testEndpoint } from '@/lib/backend'
+import { remoteEndpointIssue } from '@/lib/remote-endpoint'
+import type {
+  CredentialInput,
+  PipelineConfig,
+  RemoteCredentials,
+  RemoteEndpointConfig,
+  StageExecution,
+} from '@koharu/bridge/protocol'
+import { Button } from '@koharu/ui/components/button'
 import {
   Select,
   SelectContent,
@@ -34,6 +45,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@koharu/ui/components/select'
+import { Switch } from '@koharu/ui/components/switch'
 
 const stages = [
   ['detection', Search],
@@ -44,9 +56,13 @@ const stages = [
 export function PipelinePreferences({
   value,
   onChange,
+  credentials,
+  onCredentialsChange,
 }: {
   value: PipelineConfig
   onChange: (value: PipelineConfig) => void
+  credentials: RemoteCredentials
+  onCredentialsChange: (value: RemoteCredentials) => void
 }) {
   const { t } = useTranslation()
   return (
@@ -66,6 +82,25 @@ export function PipelinePreferences({
               align='start'
             >
               <div className='grid gap-3'>
+                <RemoteStageSettings
+                  stage={stage}
+                  execution={value.remote?.[stage] ?? { mode: 'local' }}
+                  credential={credentials[stage]}
+                  onExecutionChange={(execution) =>
+                    onChange({
+                      ...value,
+                      remote: {
+                        detection: value.remote?.detection ?? { mode: 'local' },
+                        ocr: value.remote?.ocr ?? { mode: 'local' },
+                        inpainting: value.remote?.inpainting ?? { mode: 'local' },
+                        [stage]: execution,
+                      },
+                    })
+                  }
+                  onCredentialChange={(credential) =>
+                    onCredentialsChange({ ...credentials, [stage]: credential })
+                  }
+                />
                 <div className='flex items-center gap-2'>
                   <Icon className='size-3.5 shrink-0 text-muted-foreground' />
                   <Select
@@ -107,7 +142,174 @@ export function PipelinePreferences({
   )
 }
 
-function ModelOptions({
+function RemoteStageSettings({
+  stage,
+  execution,
+  credential,
+  onExecutionChange,
+  onCredentialChange,
+}: {
+  stage: ModelStage
+  execution: StageExecution
+  credential: CredentialInput
+  onExecutionChange: (execution: StageExecution) => void
+  onCredentialChange: (credential: CredentialInput) => void
+}) {
+  const { t } = useTranslation()
+  const [test, setTest] = useState<{
+    busy: boolean
+    message: string | null
+    reachable: boolean | null
+  }>({
+    busy: false,
+    message: null,
+    reachable: null,
+  })
+  const remote = execution.mode === 'remote'
+  const endpoint: { mode: 'remote' } & RemoteEndpointConfig = remote
+    ? execution
+    : {
+        mode: 'remote',
+        base_url: null,
+        model: null,
+        timeout_seconds: 300,
+        max_response_mib: 64,
+      }
+  const endpointIssue = remote ? remoteEndpointIssue(execution) : null
+
+  async function runTest() {
+    setTest({ busy: true, message: null, reachable: null })
+    try {
+      const result = await testEndpoint(stage, endpoint)
+      setTest({ busy: false, message: result.message, reachable: result.reachable })
+    } catch (error) {
+      setTest({
+        busy: false,
+        message:
+          error instanceof Error ? error.message : t('settings.pipeline.endpoint.testFailed'),
+        reachable: false,
+      })
+    }
+  }
+
+  return (
+    <div className='grid gap-3 rounded-lg border border-border/70 bg-background/40 p-3'>
+      <div className='flex items-center justify-between gap-3'>
+        <div>
+          <p className='text-[11px] font-medium'>{t('settings.pipeline.endpoint.mode')}</p>
+          <p className='text-[10px] text-muted-foreground'>
+            {t(
+              remote
+                ? 'settings.pipeline.endpoint.remoteDescription'
+                : 'settings.pipeline.endpoint.localDescription',
+            )}
+          </p>
+        </div>
+        <div className='flex items-center gap-2'>
+          <span className='text-[10px] text-muted-foreground'>
+            {t(remote ? 'settings.pipeline.endpoint.remote' : 'settings.pipeline.endpoint.local')}
+          </span>
+          <Switch
+            checked={remote}
+            aria-label={t('settings.pipeline.endpoint.remoteModeLabel', {
+              stage: t(`settings.pipeline.stages.${stage}.title`),
+            })}
+            onCheckedChange={(checked) =>
+              onExecutionChange(
+                checked
+                  ? { mode: 'remote', timeout_seconds: 300, max_response_mib: 64 }
+                  : { mode: 'local' },
+              )
+            }
+          />
+        </div>
+      </div>
+      {remote && (
+        <>
+          <TextField
+            label={t('settings.pipeline.endpoint.baseUrl')}
+            type='url'
+            value={endpoint.base_url ?? ''}
+            onChange={(base_url) =>
+              onExecutionChange({ ...endpoint, mode: 'remote', base_url: base_url || null })
+            }
+          />
+          {endpointIssue && (
+            <p className='text-[10px] text-destructive' role='status'>
+              {t(`settings.pipeline.endpoint.validation.${endpointIssue}`)}
+            </p>
+          )}
+          <TextField
+            label={t('settings.pipeline.endpoint.modelOverride')}
+            value={endpoint.model ?? ''}
+            onChange={(model) =>
+              onExecutionChange({ ...endpoint, mode: 'remote', model: model || null })
+            }
+          />
+          <div className='grid grid-cols-2 gap-2'>
+            <NumberField
+              label={t('settings.pipeline.endpoint.timeout')}
+              value={endpoint.timeout_seconds}
+              min={1}
+              max={3600}
+              step={1}
+              onChange={(timeout_seconds) =>
+                timeout_seconds !== null &&
+                onExecutionChange({ ...endpoint, mode: 'remote', timeout_seconds })
+              }
+            />
+            <NumberField
+              label={t('settings.pipeline.endpoint.responseLimit')}
+              value={endpoint.max_response_mib}
+              min={1}
+              max={256}
+              step={1}
+              onChange={(max_response_mib) =>
+                max_response_mib !== null &&
+                onExecutionChange({ ...endpoint, mode: 'remote', max_response_mib })
+              }
+            />
+          </div>
+          <CredentialField
+            label={t(`settings.pipeline.stages.${stage}.title`)}
+            value={credential}
+            onChange={onCredentialChange}
+          />
+          <div className='flex flex-wrap items-center gap-2'>
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              disabled={test.busy || endpointIssue !== null}
+              onClick={() => void runTest()}
+            >
+              {t(
+                test.busy
+                  ? 'settings.pipeline.endpoint.testing'
+                  : 'settings.pipeline.endpoint.test',
+              )}
+            </Button>
+            <span className='text-[10px] text-muted-foreground'>
+              {t('settings.pipeline.endpoint.savedCredentialHint')}
+            </span>
+            {test.message && (
+              <span
+                className={
+                  test.reachable ? 'text-[10px] text-green-600' : 'text-[10px] text-destructive'
+                }
+                role='status'
+              >
+                {test.message}
+              </span>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+export function ModelOptions({
   model,
   onChange,
 }: {

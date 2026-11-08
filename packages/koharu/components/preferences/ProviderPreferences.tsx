@@ -84,7 +84,7 @@ export function ProviderPreferences({
   )
 }
 
-function CredentialField({
+export function CredentialField({
   label,
   value,
   onChange,

@@ -5,9 +5,11 @@ mod config;
 mod error;
 mod execution;
 mod images;
+pub mod inference;
 mod model_cell;
 mod pipeline;
 mod progress;
+pub mod remote;
 mod report;
 mod request;
 mod resources;
@@ -18,11 +20,14 @@ mod stage_runner;
 mod stages;
 
 pub use config::{
-    DetectionModel, InpaintingModel, OcrModel, PipelineConfig, ProcessorConfig, TranslationConfig,
+    DetectionModel, InpaintingModel, OcrModel, PipelineConfig, ProcessorConfig,
+    RemotePipelineConfig, TranslationConfig,
 };
 pub use error::{ErrorKind, PipelineError};
+pub use inference::{InferenceService, InpaintOptions, ServerConfig, ServerFeatures, ServerStatus};
 pub use pipeline::Pipeline;
 pub use progress::{Progress, ProgressSink};
+pub use remote::{RemoteEndpointConfig, StageExecution};
 pub use report::{Committer, Report, RunStatus, StageOutput};
 pub use request::{InpaintingMask, Operation, Request, StopToken};
 pub use resources::{

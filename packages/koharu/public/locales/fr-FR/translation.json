@@ -555,7 +555,7 @@
       "title": "Modèles locaux"
     },
     "pipeline": {
-      "description": "Choisissez les modèles et les options utilisés pour traiter chaque page.",
+      "description": "Configure execution mode (local accelerator or remote endpoint) and model options for vision and inpainting stages (Detection, OCR, Inpainting). Translation models and provider connections are managed separately under Translation and Providers.",
       "modelLabel": "Modèle de {{stage}}",
       "options": {
         "bubbleThreshold": "Seuil des bulles",
@@ -622,7 +622,29 @@
           "title": "OCR"
         }
       },
-      "title": "Pipeline"
+      "title": "Pipeline",
+      "endpoint": {
+        "mode": "Execution endpoint",
+        "local": "Local",
+        "remote": "Remote",
+        "localDescription": "Run inference directly using local accelerator or CPU.",
+        "remoteDescription": "Forward requests to an authorized OpenAI-compatible or Koharu HTTP inference server.",
+        "remoteModeLabel": "{{stage}} execution mode",
+        "baseUrl": "Base URL",
+        "modelOverride": "Model override (optional)",
+        "timeout": "Timeout (seconds)",
+        "responseLimit": "Max response (MiB)",
+        "test": "Test connection",
+        "testing": "Testing…",
+        "testFailed": "Connection test failed",
+        "validation": {
+          "missingUrl": "Enter a valid base URL (e.g. http://host:8000/v1).",
+          "invalidUrl": "URL must use http:// or https:// and cannot contain queries or credentials.",
+          "invalidLimits": "Check timeout (1..3600s) and max response size (1..256MiB).",
+          "incompleteStage": "{{stage}} remote endpoint configuration is incomplete. Check the base URL."
+        },
+        "savedCredentialHint": "Tests using saved credential."
+      }
     },
     "providers": {
       "clearCredential": "Effacer les identifiants {{provider}}",
@@ -649,7 +671,8 @@
       "providers": "Fournisseurs",
       "shortcuts": "Raccourcis",
       "translation": "Traduction",
-      "typesetting": "Lettrage"
+      "typesetting": "Lettrage",
+      "server": "Server"
     },
     "title": "Paramètres",
     "translation": {
@@ -662,7 +685,7 @@
       "instructionsPlaceholder": "Indications facultatives pour tout le projet",
       "maxPagesPerRequest": "Nombre maximum de pages par requête",
       "model": "Modèle",
-      "modelDescription": "Les libellés de fournisseur indiquent où chaque modèle s’exécute ; les connexions se configurent séparément.",
+      "modelDescription": "Select the text translation model. Translation provider endpoints and API keys are configured under Providers, independently of vision and inpainting endpoints.",
       "modelQuantization": "Quantification du modèle",
       "output": "Sortie",
       "quantization": "Quantification",
@@ -685,7 +708,48 @@
       "loadingFonts": "Chargement des polices…",
       "removeFamily": "Retirer {{family}}",
       "title": "Lettrage"
-    }
+    },
+    "server": {
+      "title": "Server",
+      "description": "Configure the integrated core inference server to handle remote requests.",
+      "status": "Server status",
+      "statusDescription": "Current inference engine state and execution counters.",
+      "currentStatus": "Runtime state",
+      "statusCounters": "Queued: {{queued}} · Completed: {{completed}} · Failed: {{failed}}",
+      "lastError": "Last error: {{error}}",
+      "activeStage": "Active: {{stage}}",
+      "idle": "Idle",
+      "loadedModel": "Loaded model: {{loaded}}",
+      "none": "None",
+      "refresh": "Refresh",
+      "unload": "Unload models",
+      "warmup": "Warmup stage",
+      "warmupDescription": "Preload stage models to accelerator memory ahead of requests.",
+      "configuration": "Server configuration",
+      "configurationDescription": "Inference listener behavior, security, and hardware limits.",
+      "enabled": "Accept remote inference",
+      "enabledDescription": "Allow external clients to submit vision and inpainting tasks.",
+      "requireToken": "Require API token",
+      "requireTokenDescription": "Require requests to include the application API token as a Bearer token.",
+      "cpu": "Force CPU execution",
+      "cpuDescription": "Run server models on CPU even when an accelerator is available.",
+      "features": "Enabled stages",
+      "featuresDescription": "Select which pipeline capabilities the server exposes to clients.",
+      "limits": "Request limits",
+      "limitsDescription": "Configure maximum request payload, image size, and queue capacity.",
+      "maxRequestMib": "Max request (MiB)",
+      "maxImagePixels": "Max image pixels",
+      "maxQueue": "Max queue depth",
+      "models": "Server models",
+      "modelsDescription": "Select and configure models used exclusively for server inference.",
+      "apply": "Apply settings",
+      "applying": "Applying…",
+      "loadFailed": "Could not load server status.",
+      "applyFailed": "Could not apply server settings.",
+      "unloadFailed": "Could not unload server models.",
+      "warmupFailed": "Could not warm up the model."
+    },
+    "saveFailed": "Could not save settings."
   },
   "start": {
     "create": "Créer",

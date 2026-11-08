@@ -1,0 +1,427 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Koharu Remote ML Service",
+    "version": "1.0.0",
+    "description": "Microservice OpenAPI specification for Koharu remote vision stages: layout detection, OCR text recognition, and OpenAI-compatible image inpainting."
+  },
+  "paths": {
+    "/v1/detect": {
+      "post": {
+        "summary": "Run layout detection on a comic or manga page",
+        "operationId": "detectLayout",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "image"
+                ],
+                "properties": {
+                  "image": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Source image encoded as PNG or JPEG"
+                  },
+                  "model": {
+                    "type": "string",
+                    "description": "Target detection model identifier (e.g. koharu-layout-rfdetr-seg-2xl)"
+                  },
+                  "text_threshold": {
+                    "type": "number",
+                    "format": "float",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "description": "Confidence threshold for text region detection"
+                  },
+                  "bubble_threshold": {
+                    "type": "number",
+                    "format": "float",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "description": "Confidence threshold for speech bubble detection"
+                  },
+                  "panel_threshold": {
+                    "type": "number",
+                    "format": "float",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "description": "Confidence threshold for panel border detection"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Layout detections with segmentation masks and bounding boxes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WireDetectionsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input format or out-of-bounds parameters"
+          },
+          "500": {
+            "description": "Internal model execution failure"
+          }
+        }
+      }
+    },
+    "/v1/ocr": {
+      "post": {
+        "summary": "Run OCR text recognition on cropped image regions",
+        "operationId": "recognizeOcr",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "ids",
+                  "images"
+                ],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "description": "OCR model identifier (e.g. manga-ocr, baberu-ocr, hayai-ocr)"
+                  },
+                  "ids": {
+                    "type": "string",
+                    "description": "JSON array of string IDs corresponding in order to the multipart images"
+                  },
+                  "images": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    },
+                    "description": "Cropped text region image files"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recognized text by region ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WireOcrResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid input or mismatched region IDs count"
+          },
+          "500": {
+            "description": "Internal OCR failure"
+          }
+        }
+      }
+    },
+    "/v1/images/edits": {
+      "post": {
+        "summary": "OpenAI-compatible image inpainting edit endpoint",
+        "operationId": "editImage",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "image",
+                  "mask"
+                ],
+                "properties": {
+                  "image": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Original base image to inpaint"
+                  },
+                  "mask": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "Alpha-channel mask where transparent pixels (alpha=0) indicate inpainting area and opaque pixels (alpha=255) indicate preserved area"
+                  },
+                  "model": {
+                    "type": "string",
+                    "description": "Model identifier (e.g. lama, flux2-klein, flux3-klein, rorem-mixed)"
+                  },
+                  "prompt": {
+                    "type": "string",
+                    "description": "Optional generation guidance prompt (omitted for promptless models such as LaMa)"
+                  },
+                  "negative_prompt": {
+                    "type": "string",
+                    "description": "Optional negative generation guidance"
+                  },
+                  "n": {
+                    "type": "integer",
+                    "default": 1,
+                    "description": "Number of images to generate"
+                  },
+                  "size": {
+                    "type": "string",
+                    "description": "Target image resolution (WIDTHxHEIGHT)"
+                  },
+                  "response_format": {
+                    "type": "string",
+                    "enum": [
+                      "b64_json",
+                      "url"
+                    ],
+                    "default": "b64_json"
+                  },
+                  "steps": {
+                    "type": "integer",
+                    "description": "Inference steps"
+                  },
+                  "strength": {
+                    "type": "number",
+                    "format": "double",
+                    "description": "Denoising strength"
+                  },
+                  "guidance_scale": {
+                    "type": "number",
+                    "format": "float",
+                    "description": "Classifier-free guidance scale"
+                  },
+                  "seed": {
+                    "type": "integer",
+                    "format": "int64",
+                    "description": "Random seed"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Inpainted image as direct image binary, or JSON containing b64_json / url",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImagesEditResponse"
+                }
+              },
+              "image/png": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parameters or invalid image dimensions"
+          },
+          "500": {
+            "description": "Inpainting execution failure"
+          }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "summary": "List enabled Koharu inference models",
+        "operationId": "listModels",
+        "responses": {
+          "200": {
+            "description": "OpenAI-compatible model catalog"
+          },
+          "401": {
+            "description": "Missing or invalid API token"
+          },
+          "503": {
+            "description": "Inference server is disabled"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "WireDetectionsResponse": {
+        "type": "object",
+        "required": [
+          "detections",
+          "image_width",
+          "image_height"
+        ],
+        "properties": {
+          "image_width": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "image_height": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "detections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WireDetection"
+            }
+          }
+        }
+      },
+      "WireDetection": {
+        "type": "object",
+        "required": [
+          "label",
+          "score",
+          "bbox",
+          "mask"
+        ],
+        "properties": {
+          "label_id": {
+            "type": "integer"
+          },
+          "label": {
+            "type": "string",
+            "enum": [
+              "text",
+              "onomatopoeia",
+              "bubble",
+              "panel",
+              "other"
+            ]
+          },
+          "score": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0
+          },
+          "bbox": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 4,
+            "maxItems": 4,
+            "description": "[left, top, right, bottom] in pixels"
+          },
+          "area": {
+            "type": "integer"
+          },
+          "mask": {
+            "$ref": "#/components/schemas/WireMask"
+          }
+        }
+      },
+      "WireMask": {
+        "type": "object",
+        "required": [
+          "width",
+          "height"
+        ],
+        "properties": {
+          "x": {
+            "type": "integer",
+            "default": 0
+          },
+          "y": {
+            "type": "integer",
+            "default": 0
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pixels": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            }
+          },
+          "pixels_b64": {
+            "type": "string",
+            "description": "Base64-encoded raw 8-bit mask bytes (width * height)"
+          },
+          "png_b64": {
+            "type": "string",
+            "description": "Base64-encoded grayscale PNG"
+          }
+        }
+      },
+      "WireOcrResponse": {
+        "type": "object",
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WireOcrItem"
+            }
+          },
+          "texts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "WireOcrItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "text"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "ImagesEditResponse": {
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImagesEditItem"
+            }
+          }
+        }
+      },
+      "ImagesEditItem": {
+        "type": "object",
+        "properties": {
+          "b64_json": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      }
+    }
+  }
+}

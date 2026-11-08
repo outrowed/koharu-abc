@@ -10,6 +10,7 @@ import {
   Monitor,
   Moon,
   Palette,
+  Server,
   Sparkles,
   Sun,
   Type,
@@ -27,15 +28,19 @@ import {
   PreferenceSection,
 } from '@/components/preferences/PreferenceFields'
 import { ProviderPreferences } from '@/components/preferences/ProviderPreferences'
+import { ServerPreferences } from '@/components/preferences/ServerPreferences'
 import { TranslationPreferences } from '@/components/preferences/TranslationPreferences'
 import { TypesettingPreferences } from '@/components/preferences/TypesettingPreferences'
 import { refreshPreferences, refreshTranslationModels, savePreferences } from '@/lib/backend'
 import { supportedLanguages } from '@/lib/i18n'
+import { invalidRemoteStage } from '@/lib/remote-endpoint'
 import { receivePreferences, useKoharuStore, type ShortcutAction } from '@/lib/store'
 import {
+  type CredentialInput,
   type PipelineConfig,
   type Preferences,
   type ProviderPreferences as ProviderSettings,
+  type RemoteCredentials,
   type TypesettingConfig,
 } from '@koharu/bridge/protocol'
 import { Button } from '@koharu/ui/components/button'
@@ -52,6 +57,7 @@ import {
 const tabs = [
   ['appearance', Palette],
   ['pipeline', Cpu],
+  ['server', Server],
   ['providers', KeyRound],
   ['translation', Languages],
   ['models', Boxes],
@@ -62,6 +68,20 @@ const tabs = [
   ['shortcuts', Keyboard],
 ] as const
 type Tab = (typeof tabs)[number][0]
+
+const emptyCredential = (): CredentialInput => ({
+  configured: false,
+  editable: true,
+  environment_variable: null,
+  value: null,
+  clear: false,
+})
+
+const defaultRemoteCredentials = (): RemoteCredentials => ({
+  detection: emptyCredential(),
+  ocr: emptyCredential(),
+  inpainting: emptyCredential(),
+})
 
 export function SettingsPage() {
   const { t } = useTranslation()
@@ -77,7 +97,11 @@ export function SettingsPage() {
   const [typesetting, setTypesetting] = useState<TypesettingConfig | null>(
     preferences?.typesetting ?? null,
   )
+  const [remoteCredentials, setRemoteCredentials] = useState<RemoteCredentials>(
+    preferences?.remote_credentials ?? defaultRemoteCredentials(),
+  )
   const translation = pipeline?.translation ?? null
+  const [saveError, setSaveError] = useState<string | null>(null)
   const lastSaved = useRef<string | null>(null)
   const lastSavedProviders = useRef<string | null>(null)
   const saveGeneration = useRef(0)
@@ -85,15 +109,18 @@ export function SettingsPage() {
   const lastPending = useRef<{ serialized: string; promise: Promise<Preferences> } | null>(null)
   const currentDraft = useRef<string | null>(null)
   currentDraft.current =
-    pipeline && providers && typesetting ? JSON.stringify([pipeline, providers, typesetting]) : null
+    pipeline && providers && typesetting
+      ? JSON.stringify([pipeline, providers, typesetting, remoteCredentials])
+      : null
 
   const saveDraft = useCallback(
     async (
       pipeline: PipelineConfig,
       providers: ProviderSettings,
       typesetting: TypesettingConfig,
+      remoteCredentials: RemoteCredentials,
     ) => {
-      const serialized = JSON.stringify([pipeline, providers, typesetting])
+      const serialized = JSON.stringify([pipeline, providers, typesetting, remoteCredentials])
       if (serialized === lastSaved.current) {
         const pending = lastPending.current
         if (pending?.serialized === serialized) await pending.promise
@@ -105,7 +132,7 @@ export function SettingsPage() {
       const generation = ++saveGeneration.current
       const pending = saveQueue.current
         .catch(() => undefined)
-        .then(() => savePreferences(pipeline, providers, typesetting))
+        .then(() => savePreferences(pipeline, providers, typesetting, remoteCredentials))
       lastPending.current = { serialized, promise: pending }
       saveQueue.current = pending.then(
         () => undefined,
@@ -114,18 +141,37 @@ export function SettingsPage() {
       let saved: Preferences
       try {
         saved = await pending
+        setSaveError(null)
       } catch (error) {
         if (lastSaved.current === serialized) lastSaved.current = null
+        const message =
+          error instanceof Error && error.message ? error.message : t('settings.saveFailed')
+        setSaveError(message)
         throw error
       }
       if (generation !== saveGeneration.current || currentDraft.current !== serialized) return
-      receivePreferences(saved)
+      const safeRemoteCredentials = saved.remote_credentials
+        ? {
+            detection: { ...saved.remote_credentials.detection, value: null, clear: false },
+            ocr: { ...saved.remote_credentials.ocr, value: null, clear: false },
+            inpainting: { ...saved.remote_credentials.inpainting, value: null, clear: false },
+          }
+        : remoteCredentials
+      const safeSaved = { ...saved, remote_credentials: safeRemoteCredentials }
+      receivePreferences(safeSaved)
+      setRemoteCredentials(safeRemoteCredentials)
+      lastSaved.current = JSON.stringify([
+        saved.pipeline,
+        saved.providers,
+        saved.typesetting,
+        safeRemoteCredentials,
+      ])
       if (providersChanged) {
         lastSavedProviders.current = serializedProviders
         void refreshTranslationModels(true).catch(() => undefined)
       }
     },
-    [],
+    [t],
   )
 
   useEffect(() => {
@@ -139,11 +185,19 @@ export function SettingsPage() {
     setPipeline(preferences?.pipeline ?? null)
     setProviders(preferences?.providers ?? null)
     setTypesetting(preferences?.typesetting ?? null)
+    if (preferences?.remote_credentials) {
+      setRemoteCredentials({
+        detection: { ...preferences.remote_credentials.detection, value: null, clear: false },
+        ocr: { ...preferences.remote_credentials.ocr, value: null, clear: false },
+        inpainting: { ...preferences.remote_credentials.inpainting, value: null, clear: false },
+      })
+    }
     if (preferences) {
       lastSaved.current = JSON.stringify([
         preferences.pipeline,
         preferences.providers,
         preferences.typesetting,
+        preferences.remote_credentials,
       ])
       lastSavedProviders.current = JSON.stringify(preferences.providers)
     }
@@ -151,13 +205,14 @@ export function SettingsPage() {
 
   useEffect(() => {
     if (!open || !pipeline || !providers || !typesetting) return
-    const serialized = JSON.stringify([pipeline, providers, typesetting])
+    if (invalidRemoteStage(pipeline)) return
+    const serialized = JSON.stringify([pipeline, providers, typesetting, remoteCredentials])
     if (serialized === lastSaved.current) return
     const timeout = window.setTimeout(() => {
-      void saveDraft(pipeline, providers, typesetting).catch(() => undefined)
+      void saveDraft(pipeline, providers, typesetting, remoteCredentials).catch(() => undefined)
     }, 260)
     return () => window.clearTimeout(timeout)
-  }, [open, pipeline, providers, saveDraft, typesetting])
+  }, [open, pipeline, providers, remoteCredentials, saveDraft, typesetting])
 
   if (!open) return null
 
@@ -173,9 +228,21 @@ export function SettingsPage() {
               setOpen(false)
               return
             }
-            void saveDraft(pipeline, providers, typesetting)
+            const invalidStage = invalidRemoteStage(pipeline)
+            if (invalidStage) {
+              const stageTitle = t(`settings.pipeline.stages.${invalidStage}.title`)
+              setSaveError(
+                t('settings.pipeline.endpoint.validation.incompleteStage', { stage: stageTitle }),
+              )
+              return
+            }
+            void saveDraft(pipeline, providers, typesetting, remoteCredentials)
               .then(() => setOpen(false))
-              .catch(() => undefined)
+              .catch((cause) => {
+                const message =
+                  cause instanceof Error && cause.message ? cause.message : t('settings.saveFailed')
+                setSaveError(message)
+              })
           }}
         >
           <ArrowLeft className='size-4' /> {t('settings.backToEditor')}
@@ -205,13 +272,27 @@ export function SettingsPage() {
         </header>
         <ScrollArea className='min-h-0 flex-1'>
           <div className='mx-auto w-full max-w-4xl px-10 py-10'>
+            {saveError && (
+              <p
+                className='mb-6 rounded-md border border-destructive/30 bg-destructive/10 px-4 py-2.5 text-[12px] text-destructive'
+                role='alert'
+              >
+                {saveError}
+              </p>
+            )}
             {tab === 'appearance' && <AppearancePreferences />}
             {tab === 'pipeline' &&
               (pipeline ? (
-                <PipelinePreferences value={pipeline} onChange={setPipeline} />
+                <PipelinePreferences
+                  value={pipeline}
+                  onChange={setPipeline}
+                  credentials={remoteCredentials}
+                  onCredentialsChange={setRemoteCredentials}
+                />
               ) : (
                 <LoadingPreferences />
               ))}
+            {tab === 'server' && <ServerPreferences />}
             {tab === 'providers' &&
               (providers ? (
                 <ProviderPreferences value={providers} onChange={setProviders} />

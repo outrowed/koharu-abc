@@ -77,14 +77,44 @@ impl From<PaddleOcrVl1_6MangaLoraConfig> for PaddleOCRVLQuantizedSource {
 }
 
 pub(super) struct Processor {
+    execution: crate::StageExecution,
+    client: reqwest::Client,
     config: OcrModel,
     device: koharu_ml::Device,
     model: ModelCell<Model>,
 }
 
 impl Processor {
-    pub(super) fn new(config: OcrModel, device: koharu_ml::Device) -> Self {
+    pub(crate) async fn infer(
+        &self,
+        images: Vec<(String, DynamicImage)>,
+    ) -> Result<Vec<(String, String)>> {
+        if self.execution.is_remote() {
+            let crate::StageExecution::Remote(endpoint) = &self.execution else {
+                unreachable!()
+            };
+            return Model::Remote(self.client.clone(), endpoint.clone(), self.model())
+                .infer_images(images)
+                .await;
+        }
+        self.model
+            .ensure(|| Model::load(self.device.clone(), &self.config))
+            .await?;
+        let guard = self.model.lock().await;
+        let model = guard
+            .as_ref()
+            .ok_or_else(|| anyhow!("OCR model is not loaded"))?;
+        model.infer_images(images).await
+    }
+    pub(super) fn new(
+        config: OcrModel,
+        execution: crate::StageExecution,
+        client: reqwest::Client,
+        device: koharu_ml::Device,
+    ) -> Self {
         Self {
+            execution,
+            client,
             config,
             device,
             model: ModelCell::new(),
@@ -105,11 +135,33 @@ impl StageProcessor for Processor {
         }
     }
 
+    fn is_remote(&self) -> bool {
+        self.execution.is_remote()
+    }
+
     fn unload(&self) -> bool {
         self.model.unload()
     }
 
     async fn load(&self) -> Result<()> {
+        if let crate::StageExecution::Remote(endpoint) = &self.execution {
+            return self
+                .model
+                .ensure(|| async {
+                    Ok(Model::Remote(
+                        self.client.clone(),
+                        endpoint.clone(),
+                        self.model(),
+                    ))
+                })
+                .await;
+        }
+        match self.config {
+            OcrModel::PaddleOcrVl1_6 | OcrModel::PaddleOcrVl1_6MangaLora(_) => {
+                koharu_ml::init_llama().await?
+            }
+            _ => koharu_ml::init_torch().await?,
+        }
         self.model
             .ensure(|| Model::load(self.device.clone(), &self.config))
             .await
@@ -127,16 +179,62 @@ impl StageProcessor for Processor {
 }
 
 enum Model {
+    Remote(reqwest::Client, crate::RemoteEndpointConfig, &'static str),
     Manga(Arc<Mutex<MangaOcr>>),
     MangaCptFlex(Arc<Mutex<MangaOcrCptFlex>>),
     Baberu(Arc<Mutex<BaberuOcr>>),
     Hayai(Arc<Mutex<HayaiOcr>>),
-    /// The quantized PaddleOCR-VL family shares one runtime; the name records
-    /// which variant produced a result.
     Paddle(Arc<Mutex<PaddleOCRVLQuantized>>, &'static str),
 }
 
 impl Model {
+    async fn infer_images(
+        &self,
+        images: Vec<(String, DynamicImage)>,
+    ) -> Result<Vec<(String, String)>> {
+        match self {
+            Self::Remote(client, endpoint, name) => {
+                let regions = images
+                    .iter()
+                    .map(|(id, image)| crate::remote::RemoteOcrRegion {
+                        id: id.clone(),
+                        image: image.clone(),
+                    })
+                    .collect::<Vec<_>>();
+                let texts = crate::remote::ocr_remote(
+                    client,
+                    endpoint,
+                    crate::remote::ocr_secret_key(),
+                    name,
+                    &regions,
+                )
+                .await?;
+                Ok(images
+                    .into_iter()
+                    .zip(texts)
+                    .map(|((id, _), text)| (id, normalize_ocr_text(text)))
+                    .collect())
+            }
+            Self::Manga(model) => {
+                run_ocr_closure(model.clone(), images, |m, img| m.inference(img)).await
+            }
+            Self::MangaCptFlex(model) => {
+                run_ocr_closure(model.clone(), images, |m, img| m.inference(img)).await
+            }
+            Self::Baberu(model) => {
+                run_ocr_closure(model.clone(), images, |m, img| m.inference(img)).await
+            }
+            Self::Hayai(model) => {
+                run_ocr_closure(model.clone(), images, |m, img| m.inference(img)).await
+            }
+            Self::Paddle(model, _) => {
+                run_ocr_closure(model.clone(), images, |m, img| {
+                    Ok(m.inference(img, PaddleOCRVLTask::Ocr)?.text)
+                })
+                .await
+            }
+        }
+    }
     async fn load(device: koharu_ml::Device, config: &OcrModel) -> Result<Self> {
         match config {
             OcrModel::MangaOcr => Ok(Self::Manga(Arc::new(Mutex::new(
@@ -169,6 +267,7 @@ impl Model {
 
     async fn run(&self, input: StageInput) -> Result<koharu_scene::Patch> {
         let model_name = match self {
+            Self::Remote(_, endpoint, name) => endpoint.effective_model(name),
             Self::Manga(_) => "manga-ocr",
             Self::MangaCptFlex(_) => "manga-ocr-cpt-flex",
             Self::Baberu(_) => "baberu-ocr",
@@ -220,6 +319,37 @@ impl Model {
         }
 
         let results = match self {
+            Self::Remote(client, endpoint, name) => {
+                let mut results = Vec::with_capacity(targets.len());
+                for batch in targets.chunks(16) {
+                    let regions = batch
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| crate::remote::RemoteOcrRegion {
+                            id: i.to_string(),
+                            image: t.image.clone(),
+                        })
+                        .collect::<Vec<_>>();
+                    let texts = crate::remote::ocr_remote(
+                        client,
+                        endpoint,
+                        crate::remote::ocr_secret_key(),
+                        name,
+                        &regions,
+                    )
+                    .await?;
+                    for (target, text) in batch.iter().zip(texts) {
+                        results.push(OcrResult {
+                            content: target.content,
+                            region: target.region,
+                            geometry: target.geometry.clone(),
+                            previous: target.previous.clone(),
+                            text: normalize_ocr_text(text),
+                        });
+                    }
+                }
+                results
+            }
             Self::Manga(model) => {
                 infer_text(model.clone(), targets, |model, image| {
                     model.inference(image)
@@ -379,4 +509,24 @@ mod tests {
         assert_eq!(normalize_ocr_text("待って…".to_owned()), "待って…");
         assert_eq!(normalize_ocr_text("☐".to_owned()), "☐");
     }
+}
+
+async fn run_ocr_closure<M: Send + 'static>(
+    model: Arc<Mutex<M>>,
+    images: Vec<(String, DynamicImage)>,
+    infer: impl Fn(&M, &DynamicImage) -> Result<String> + Send + Sync + 'static,
+) -> Result<Vec<(String, String)>> {
+    tokio_rayon::spawn(move || {
+        let model = model
+            .lock()
+            .map_err(|_| anyhow!("OCR model lock is poisoned"))?;
+        images
+            .into_iter()
+            .map(|(id, img)| {
+                let text = infer(&model, &img)?;
+                Ok((id, normalize_ocr_text(text)))
+            })
+            .collect()
+    })
+    .await
 }

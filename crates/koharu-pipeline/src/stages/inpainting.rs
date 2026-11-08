@@ -441,6 +441,8 @@ impl InpaintingModel {
 }
 
 pub(super) struct Processor {
+    execution: crate::StageExecution,
+    client: reqwest::Client,
     config: InpaintingModel,
     device: koharu_ml::Device,
     resources: Arc<ResourceMonitor>,
@@ -448,14 +450,35 @@ pub(super) struct Processor {
 }
 
 impl Processor {
+    pub(crate) async fn infer(
+        &self,
+        image: DynamicImage,
+        mask: GrayImage,
+        options: crate::inference::InpaintOptions,
+    ) -> Result<DynamicImage> {
+        self.model
+            .ensure(|| Model::load(self.device_for_load(), &self.config))
+            .await?;
+        let guard = self.model.lock().await;
+        let model = guard
+            .as_ref()
+            .ok_or_else(|| anyhow!("inpainting model is not loaded"))?;
+        model.infer_raw(image, mask, options).await
+    }
     pub(super) fn new(
         config: InpaintingModel,
+        execution: crate::StageExecution,
+        client: reqwest::Client,
         device: koharu_ml::Device,
         resources: Arc<ResourceMonitor>,
     ) -> Result<Self> {
-        config.validate()?;
+        if !execution.is_remote() {
+            config.validate()?;
+        }
 
         Ok(Self {
+            execution,
+            client,
             config,
             device,
             resources,
@@ -514,11 +537,35 @@ impl StageProcessor for Processor {
         Ok(false)
     }
 
+    fn is_remote(&self) -> bool {
+        self.execution.is_remote()
+    }
+
     fn unload(&self) -> bool {
         self.model.unload()
     }
 
     async fn load(&self) -> Result<()> {
+        if let crate::StageExecution::Remote(endpoint) = &self.execution {
+            return self
+                .model
+                .ensure(|| async {
+                    Ok(Model::Remote(
+                        self.client.clone(),
+                        endpoint.clone(),
+                        Box::new(self.config.clone()),
+                        self.model(),
+                    ))
+                })
+                .await;
+        }
+        match self.config {
+            InpaintingModel::Flux2Klein(_)
+            | InpaintingModel::Flux3Klein(_)
+            | InpaintingModel::RoremMixed(_)
+            | InpaintingModel::PowerPaint(_) => koharu_ml::init_diffusion().await?,
+            _ => koharu_ml::init_torch().await?,
+        }
         self.model
             .ensure(|| Model::load(self.device_for_load(), &self.config))
             .await
@@ -536,6 +583,12 @@ impl StageProcessor for Processor {
 }
 
 enum Model {
+    Remote(
+        reqwest::Client,
+        crate::RemoteEndpointConfig,
+        Box<InpaintingModel>,
+        &'static str,
+    ),
     LaMa(Arc<Mutex<LaMa>>),
     MiGan(Arc<Mutex<MiGan>>),
     MangaInpaintor(Arc<Mutex<MangaInpaintor>>),
@@ -632,6 +685,217 @@ impl Model {
         }
     }
 
+    async fn infer_raw(
+        &self,
+        image: DynamicImage,
+        mask: GrayImage,
+        options: crate::inference::InpaintOptions,
+    ) -> Result<DynamicImage> {
+        match self {
+            Self::Remote(client, endpoint, config, name) => {
+                let (prompt, negative_prompt) = match config.as_ref() {
+                    InpaintingModel::Flux2Klein(c) => (Some(c.prompt.as_str()), None),
+                    InpaintingModel::Flux3Klein(c) => (Some(c.request.as_str()), None),
+                    InpaintingModel::RoremMixed(c) => {
+                        (Some(c.prompt.as_str()), Some(c.negative_prompt.as_str()))
+                    }
+                    _ => (None, None),
+                };
+                let remote_opts = crate::remote::RemoteInpaintOptions {
+                    model: name,
+                    prompt: options.prompt.as_deref().or(prompt),
+                    negative_prompt: options.negative_prompt.as_deref().or(negative_prompt),
+                    steps: options.steps,
+                    strength: options.strength,
+                    guidance_scale: options.guidance_scale,
+                    seed: options.seed,
+                };
+                crate::remote::inpaint_via_edits(
+                    client,
+                    endpoint,
+                    crate::remote::inpainting_secret_key(),
+                    &image,
+                    &mask,
+                    &remote_opts,
+                )
+                .await
+            }
+            Self::LaMa(model) => {
+                let model = model.clone();
+                tokio_rayon::spawn(move || {
+                    let model = model
+                        .lock()
+                        .map_err(|_| anyhow!("LaMa model lock is poisoned"))?;
+                    Ok(DynamicImage::ImageRgb8(model.inference(
+                        &image,
+                        &mask,
+                        &InpaintRequest::default(),
+                    )?))
+                })
+                .await
+            }
+            Self::MiGan(model) => {
+                let model = model.clone();
+                tokio::task::spawn_blocking(move || {
+                    let model = model
+                        .lock()
+                        .map_err(|_| anyhow!("MI-GAN model lock is poisoned"))?;
+                    Ok(DynamicImage::ImageRgb8(model.inference(
+                        &image,
+                        &mask,
+                        &InpaintRequest::default(),
+                    )?))
+                })
+                .await
+                .context("MI-GAN task panicked")?
+            }
+            Self::MangaInpaintor(model) => {
+                let model = model.clone();
+                tokio::task::spawn_blocking(move || {
+                    let model = model
+                        .lock()
+                        .map_err(|_| anyhow!("Manga inpainter lock is poisoned"))?;
+                    Ok(DynamicImage::ImageRgb8(model.inference(
+                        &image,
+                        &mask,
+                        &InpaintRequest::default(),
+                    )?))
+                })
+                .await
+                .context("Manga inpainter task panicked")?
+            }
+            Self::Aot(model) => {
+                let model = model.clone();
+                tokio_rayon::spawn(move || {
+                    let model = model
+                        .lock()
+                        .map_err(|_| anyhow!("AOT model lock is poisoned"))?;
+                    Ok(DynamicImage::ImageRgb8(model.inference(&image, &mask)?))
+                })
+                .await
+            }
+            Self::Flux { model, config } => {
+                let model = model.clone();
+                let prompt = options.prompt.unwrap_or_else(|| config.prompt.clone());
+                let mut flux_opts = config.options();
+                if let Some(steps) = options.steps {
+                    flux_opts.num_inference_steps = steps as usize;
+                }
+                if let Some(strength) = options.strength {
+                    flux_opts.strength = strength;
+                }
+                if let Some(seed) = options.seed {
+                    flux_opts.seed = seed;
+                }
+                tokio_rayon::spawn(move || {
+                    let model = model
+                        .lock()
+                        .map_err(|_| anyhow!("FLUX.2 lock is poisoned"))?;
+                    model.inference(
+                        &prompt,
+                        &image,
+                        None,
+                        &DynamicImage::ImageLuma8(mask),
+                        &flux_opts,
+                    )
+                })
+                .await
+            }
+            Self::Flux3 {
+                inpaint,
+                upsampler,
+                config,
+            } => {
+                let prompt = options.prompt.unwrap_or_else(|| config.request.clone());
+                let mut flux3_opts = config.options();
+                if let Some(steps) = options.steps {
+                    flux3_opts.num_inference_steps = steps as usize;
+                }
+                if let Some(strength) = options.strength {
+                    flux3_opts.strength = strength;
+                }
+                if let Some(seed) = options.seed {
+                    flux3_opts.seed = seed;
+                }
+                let captions = upsampler.caption(vec![image.clone()], prompt).await?;
+                let caption = captions.into_iter().next().unwrap_or_default();
+                let inpaint = inpaint.clone();
+                tokio_rayon::spawn(move || {
+                    let inpaint = inpaint
+                        .lock()
+                        .map_err(|_| anyhow!("FLUX.3 lock is poisoned"))?;
+                    inpaint.inference(
+                        &caption,
+                        &image,
+                        &DynamicImage::ImageLuma8(mask),
+                        &flux3_opts,
+                    )
+                })
+                .await
+            }
+            Self::Rorem { model, config } => {
+                let model = model.clone();
+                let prompt = options.prompt.unwrap_or_else(|| config.prompt.clone());
+                let negative_prompt = options
+                    .negative_prompt
+                    .unwrap_or_else(|| config.negative_prompt.clone());
+                let mut rorem_opts = RoremMixedOptions::default();
+                if let Some(steps) = options.steps {
+                    rorem_opts.num_inference_steps = steps as i32;
+                }
+                if let Some(strength) = options.strength {
+                    rorem_opts.strength = strength as f32;
+                }
+                if let Some(guidance) = options.guidance_scale {
+                    rorem_opts.guidance_scale = guidance;
+                }
+                if let Some(seed) = options.seed {
+                    rorem_opts.seed = seed;
+                }
+                tokio_rayon::spawn(move || {
+                    let model = model
+                        .lock()
+                        .map_err(|_| anyhow!("RORem model lock is poisoned"))?;
+                    Ok(DynamicImage::ImageRgb8(model.inference(
+                        &image,
+                        &mask,
+                        &prompt,
+                        &negative_prompt,
+                        &rorem_opts,
+                    )?))
+                })
+                .await
+            }
+            Self::PowerPaint {
+                model,
+                options: base_opts,
+            } => {
+                let model = model.clone();
+                let mut pp_opts = base_opts.clone();
+                if let Some(steps) = options.steps {
+                    pp_opts.num_inference_steps = steps as i32;
+                }
+                if let Some(strength) = options.strength {
+                    pp_opts.strength = strength as f32;
+                }
+                if let Some(guidance) = options.guidance_scale {
+                    pp_opts.guidance_scale = guidance;
+                }
+                if let Some(seed) = options.seed {
+                    pp_opts.seed = seed;
+                }
+                tokio_rayon::spawn(move || {
+                    let model = model
+                        .lock()
+                        .map_err(|_| anyhow!("PowerPaint model lock is poisoned"))?;
+                    Ok(DynamicImage::ImageRgb8(
+                        model.inference(&image, &mask, &pp_opts)?,
+                    ))
+                })
+                .await
+            }
+        }
+    }
     async fn run(&self, input: StageInput) -> Result<koharu_scene::Patch> {
         let mut prepared = prepare(&input).await?;
         if prepared.mask.as_raw().iter().all(|value| *value == 0) {
@@ -642,6 +906,82 @@ impl Model {
         let cleanup = prepared.cleanup.take();
         let cleanup_entity = prepared.cleanup_entity;
         let (model_name, image) = match self {
+            Self::Remote(client, endpoint, config, name) => {
+                let mut plan = TilePlan::new(
+                    &prepared.image,
+                    &prepared.mask,
+                    &prepared.text_mask,
+                    &prepared.flat_fill_regions,
+                )?;
+                let mut options = crate::remote::RemoteInpaintOptions {
+                    model: name,
+                    prompt: None,
+                    negative_prompt: None,
+                    steps: None,
+                    strength: None,
+                    guidance_scale: None,
+                    seed: None,
+                };
+                match config.as_ref() {
+                    InpaintingModel::Flux2Klein(c) => {
+                        options.prompt = Some(&c.prompt);
+                        options.steps = Some(c.steps);
+                        options.strength = Some(c.strength);
+                        options.seed = Some(c.seed);
+                    }
+                    InpaintingModel::Flux3Klein(c) => {
+                        options.prompt = Some(&c.request);
+                        options.steps = Some(c.steps);
+                        options.strength = Some(c.strength);
+                        options.seed = Some(c.seed);
+                    }
+                    InpaintingModel::RoremMixed(c) => {
+                        options.prompt = Some(&c.prompt);
+                        options.negative_prompt = Some(&c.negative_prompt);
+                    }
+                    InpaintingModel::PowerPaint(c) => {
+                        options.steps = if c.steps > 0 {
+                            Some(c.steps as u32)
+                        } else {
+                            None
+                        };
+                        options.strength = if c.strength > 0.0 {
+                            Some(c.strength as f64)
+                        } else {
+                            None
+                        };
+                        options.guidance_scale = if c.guidance_scale > 0.0 {
+                            Some(c.guidance_scale)
+                        } else {
+                            None
+                        };
+                        options.seed = if c.seed != 0 { Some(c.seed) } else { None };
+                    }
+                    _ => {}
+                }
+                for tile in &plan.tiles {
+                    let image = DynamicImage::ImageRgb8(crop_tile_image(&plan.output, tile));
+                    let mask = crop_tile_mask(&plan.pending_mask, tile);
+                    let generated = crate::remote::inpaint_via_edits(
+                        client,
+                        endpoint,
+                        crate::remote::inpainting_secret_key(),
+                        &image,
+                        &mask,
+                        &options,
+                    )
+                    .await?;
+                    ensure!(
+                        generated.dimensions() == image.dimensions(),
+                        "remote inpainting image dimensions differ from crop"
+                    );
+                    composite_generated(&mut plan.output, &plan.labels, tile, &generated.to_rgb8());
+                }
+                (
+                    endpoint.effective_model(name),
+                    DynamicImage::ImageRgb8(plan.output),
+                )
+            }
             Self::LaMa(model) => {
                 let model = model.clone();
                 (
@@ -1848,6 +2188,8 @@ mod tests {
         );
         let processor = Processor::new(
             InpaintingModel::LaMa(LaMaConfig::default()),
+            crate::StageExecution::Local,
+            koharu_runtime::http_client().unwrap(),
             koharu_ml::Device::cpu(),
             ResourceMonitor::new(&koharu_ml::Device::cpu()),
         )

@@ -59,13 +59,43 @@ pub struct KoharuLayoutRFDetrSeg2XLConfig {
 }
 
 pub(super) struct Processor {
+    execution: crate::StageExecution,
+    client: reqwest::Client,
     config: DetectionModel,
     device: koharu_ml::Device,
     model: ModelCell<Model>,
 }
 
 impl Processor {
-    pub(super) fn new(mut config: DetectionModel, device: koharu_ml::Device) -> Self {
+    pub(crate) async fn infer(
+        &self,
+        image: DynamicImage,
+        text: Option<f32>,
+        bubble: Option<f32>,
+        panel: Option<f32>,
+    ) -> Result<KoharuLayoutDetections> {
+        let DetectionModel::KoharuLayoutRFDetrSeg2XL(settings) = &self.config;
+        let valid = |value: Option<f32>| value.filter(|v| v.is_finite() && (0.0..=1.0).contains(v));
+        let text = valid(text).or(settings.text_threshold);
+        let bubble = valid(bubble).or(settings.bubble_threshold);
+        let panel = valid(panel).or(settings.panel_threshold);
+        self.model
+            .ensure(|| Model::load(self.device.clone(), &self.config))
+            .await?;
+        let guard = self.model.lock().await;
+        let model = guard
+            .as_ref()
+            .ok_or_else(|| anyhow!("detection model is not loaded"))?;
+        model
+            .detect_with_thresholds(image, text, bubble, panel)
+            .await
+    }
+    pub(super) fn new(
+        mut config: DetectionModel,
+        execution: crate::StageExecution,
+        client: reqwest::Client,
+        device: koharu_ml::Device,
+    ) -> Self {
         let DetectionModel::KoharuLayoutRFDetrSeg2XL(settings) = &mut config;
         for (name, value) in [
             ("text", &mut settings.text_threshold),
@@ -87,6 +117,8 @@ impl Processor {
         }
 
         Self {
+            execution,
+            client,
             config,
             device,
             model: ModelCell::new(),
@@ -114,17 +146,51 @@ impl StageProcessor for Processor {
         Ok(false)
     }
 
+    fn is_remote(&self) -> bool {
+        self.execution.is_remote()
+    }
+
     fn unload(&self) -> bool {
         self.model.unload()
     }
 
     async fn load(&self) -> Result<()> {
+        if self.execution.is_remote() {
+            return Ok(());
+        }
+        koharu_ml::init_torch().await?;
         self.model
             .ensure(|| Model::load(self.device.clone(), &self.config))
             .await
     }
 
     async fn process(&self, input: StageInput) -> Result<koharu_scene::Patch> {
+        if let crate::StageExecution::Remote(endpoint) = &self.execution {
+            let image = input
+                .images
+                .get(&input.scene, input.page, "source")
+                .await?
+                .ok_or_else(|| anyhow!("page has no source image"))?;
+            let DetectionModel::KoharuLayoutRFDetrSeg2XL(settings) = &self.config;
+            let output = crate::remote::detect_remote(
+                &self.client,
+                endpoint,
+                crate::remote::detection_secret_key(),
+                MODEL_NAME,
+                &image,
+                settings.text_threshold,
+                settings.bubble_threshold,
+                settings.panel_threshold,
+            )
+            .await?;
+            return build_patch(
+                &input,
+                &image,
+                output,
+                &generation(PRODUCER, endpoint.effective_model(MODEL_ID))?,
+            )
+            .await;
+        }
         self.model
             .lock()
             .await
@@ -166,8 +232,28 @@ impl Model {
     }
 
     async fn detect(&self, image: Arc<DynamicImage>) -> Result<KoharuLayoutDetections> {
+        self.detect_with_thresholds((*image).clone(), None, None, None)
+            .await
+    }
+
+    async fn detect_with_thresholds(
+        &self,
+        image: DynamicImage,
+        text: Option<f32>,
+        bubble: Option<f32>,
+        panel: Option<f32>,
+    ) -> Result<KoharuLayoutDetections> {
         let network = self.network.clone();
-        let thresholds = self.thresholds;
+        let mut thresholds = self.thresholds;
+        if let Some(value) = text {
+            thresholds.text = value;
+        }
+        if let Some(value) = bubble {
+            thresholds.bubble = value;
+        }
+        if let Some(value) = panel {
+            thresholds.panel = value;
+        }
         tokio_rayon::spawn(move || {
             let network = network
                 .lock()
@@ -1936,6 +2022,8 @@ mod tests {
                 bubble_threshold: Some(f32::NAN),
                 panel_threshold: Some(0.55),
             }),
+            crate::StageExecution::Local,
+            koharu_runtime::http_client().unwrap(),
             koharu_ml::Device::cpu(),
         );
 
@@ -1975,6 +2063,8 @@ mod tests {
         );
         let processor = Processor::new(
             DetectionModel::KoharuLayoutRFDetrSeg2XL(KoharuLayoutRFDetrSeg2XLConfig::default()),
+            crate::StageExecution::Local,
+            koharu_runtime::http_client().unwrap(),
             koharu_ml::Device::cpu(),
         );
 

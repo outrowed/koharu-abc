@@ -15,9 +15,6 @@ use crate::commands::{
 };
 
 pub(crate) async fn initialize(handle: AppHandle<CefRuntime>) -> Result<()> {
-    koharu_ml::init()
-        .await
-        .context("failed to initialize the ML runtime")?;
     let device = koharu_ml::device(false);
     let pipeline = koharu_pipeline::Pipeline::load(device)?;
     handle.manage(pipeline.clone());
@@ -164,10 +161,12 @@ pub fn run(context: tauri::Context<CefRuntime>, frontend_url: tauri::Url) -> Res
             window
                 .navigate(frontend_url.clone())
                 .context("failed to load the Koharu HTTP UI")?;
-            window.show().context("failed to show the main window")?;
-            window
-                .set_focus()
-                .context("failed to focus the main window")?;
+            if std::env::var_os("KOHARU_HEADLESS").is_none() {
+                window.show().context("failed to show the main window")?;
+                window
+                    .set_focus()
+                    .context("failed to focus the main window")?;
+            }
             let initialization_handle = handle.clone();
             drop(tauri::async_runtime::spawn(async move {
                 initialize(initialization_handle.clone())

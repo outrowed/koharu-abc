@@ -32,6 +32,10 @@ impl StageRunner {
         })
     }
 
+    pub(crate) fn unload_all(&self) {
+        self.stages.unload_all();
+    }
+
     pub(crate) fn translation_batch_size(&self) -> usize {
         self.stages.translation_batch_size()
     }
@@ -80,7 +84,13 @@ impl StageRunner {
         let first = self.load_and_process(job, model).await;
         let failure = match first {
             Ok(outcome) => return Ok(outcome),
-            Err(failure) if is_out_of_memory(&failure.error) && !job.stop.stopped() => failure,
+            Err(failure)
+                if !self.stages.is_remote(job.stage)
+                    && is_out_of_memory(&failure.error)
+                    && !job.stop.stopped() =>
+            {
+                failure
+            }
             Err(failure) => return Err(self.stage_error(job.stage, model, failure)),
         };
 

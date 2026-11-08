@@ -38,6 +38,29 @@ const preferences: Preferences = {
   providers: {
     entries: [],
   },
+  remote_credentials: {
+    detection: {
+      configured: false,
+      editable: true,
+      environment_variable: null,
+      value: null,
+      clear: false,
+    },
+    ocr: {
+      configured: false,
+      editable: true,
+      environment_variable: null,
+      value: null,
+      clear: false,
+    },
+    inpainting: {
+      configured: false,
+      editable: true,
+      environment_variable: null,
+      value: null,
+      clear: false,
+    },
+  },
   typesetting: {
     font_families: ['CCWildWords', 'Adobe 黑体 Std'],
   },

@@ -7,6 +7,7 @@ pub mod canvas;
 pub mod config;
 pub mod events;
 pub mod fonts;
+pub mod inference;
 pub mod layers;
 pub mod llm;
 pub mod meta;
@@ -19,6 +20,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .merge(meta::router())
         .merge(config::router())
+        .merge(inference::control_router())
         .merge(llm::router())
         .merge(projects::router())
         .merge(pages::router())

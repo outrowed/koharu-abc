@@ -96,3 +96,69 @@ Expected status는 unauthenticated 요청 401, authenticated 요청 200입니다
 - `KOHARU_RPC_PORT`를 변경하면 desktop CEF의 initial navigation과 맞도록 `crates/koharu/tauri.conf.json`의 `devUrl`도 build 전에 변경해야 합니다.
 - Provider model discovery는 외부 API에 연결하므로 key가 유효하지 않거나 provider가 unreachable이면 해당 model 목록이 비어 있을 수 있습니다.
 - `.env`는 Git에서 ignore됩니다. `.env.example`에 실제 token이나 provider key를 넣지 마세요.
+
+
+## Integrated inference server
+
+Status: implemented; use Settings > Server to configure the inference service.
+The website/editor and inference API share the existing Koharu listener. Enabling
+inference does not change its bind address or port, restart the app, or disable
+the editor. The service is disabled by default.
+
+The Server page configures enabled features, the selected model and its options
+for each feature, CPU preference, request/image/queue limits, and inference token
+requirements. Apply settings explicitly. Refresh reads current state without
+replacing unsaved settings; warm-up loads the selected model, and unload releases
+model memory. The inference worker and editor processing share one admission
+lane so they cannot race for the same model memory. Different stages evict the
+previous stage's models; repeated requests to the same stage reuse loaded models.
+
+- `GET /api/v1/server`: configuration, active/loaded stage, queue and counters.
+- `PUT /api/v1/server`: persist and apply serving configuration.
+- `POST /api/v1/server/warmup`: JSON `{ "stage": "ocr" }` (or detection/inpainting).
+- `POST /api/v1/server/unload`: unload worker models.
+- `GET /v1/models`: configured, enabled inference models.
+- `POST /v1/detect`: multipart `image`, optional `model` and thresholds.
+- `POST /v1/ocr`: multipart `images` (up to 16 crops), `ids` (JSON string array),
+  optional `model`; results carry matching request-local IDs.
+- `POST /v1/images/edits`: multipart `image`, `mask`, optional model and generation
+  settings. RGBA masks use transparent pixels for inpainting; grayscale masks use
+  white pixels. `response_format=b64_json` returns the encoded PNG, otherwise the
+  response is a PNG with the same dimensions.
+
+`specs/remote-service-openapi.json` defines the inference wire formats. The server
+serves exactly the model selected for each enabled feature, rather than accepting
+arbitrary checkpoint paths from inference callers. Unsupported model IDs fail
+explicitly. Warm-up can download the selected model and native runtime packages.
+
+A configured `KOHARU_API_TOKEN` is required for both the UI/admin API and inference
+API. On loopback-only deployments with no token, inference is still rejected by
+default; the operator must explicitly turn off Require API token to allow it.
+Keep that exception loopback-only. TLS and external network exposure belong to
+the deployment reverse proxy, not an inference request.
+
+## Per-feature remote execution
+
+Settings > Pipeline selects Local or Remote separately for detection, OCR, and
+inpainting. Each remote stage has its own base URL, optional model ID, credential,
+timeout, and response-size limit. For another Koharu instance, use its origin or
+`/v1` base URL and the model ID from its `/v1/models` catalog. The Test connection
+button probes that catalog with the saved credential; it does not run inference.
+Translation continues to use Settings > Providers and Settings > Translation,
+including its independent OpenAI-compatible URL, key, and model selection.
+
+The application backend sends inference requests, not the browser. Endpoint URLs
+must therefore be reachable from the Koharu server process. Project storage,
+scene updates, crop/tile preparation, and compositing remain on that instance.
+Remote inpainting sends sequential tiles; it is not a whole-project remote job.
+Image URLs returned by an image-edit service must be same-origin; use binary PNG
+or `b64_json` for third-party storage outputs. Response bodies and decoded images
+are bounded, requests have explicit timeouts, and redirects are rejected.
+
+Desktop credentials remain in the OS credential store. A headless container can
+opt into GUI-editable file storage with `KOHARU_SECRETS=file` and
+`KOHARU_CREDENTIAL_DIR` pointing to a persistent private directory. This explicit
+container mode stores credentials in plaintext with directory mode 0700 and file
+mode 0600; do not share that mount. `KOHARU_SECRETS=environment` remains read-only.
+Injected nonblank environment credentials always take precedence and are shown
+as read-only in settings, even when a writable store is otherwise selected.

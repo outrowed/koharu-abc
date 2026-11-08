@@ -4,7 +4,9 @@ use axum::extract::State;
 use axum::routing::get;
 use axum::{Json, Router};
 
-use koharu_app::commands::preferences::{self, Preferences, ProviderPreferences};
+use koharu_app::commands::preferences::{
+    self, Preferences, ProviderPreferences, RemoteCredentials,
+};
 use koharu_pipeline::PipelineConfig;
 use koharu_renderer::TypesettingConfig;
 use koharu_translator::Model;
@@ -27,6 +29,7 @@ struct SaveConfigRequest {
     pipeline: PipelineConfig,
     providers: ProviderPreferences,
     typesetting: TypesettingConfig,
+    remote_credentials: RemoteCredentials,
 }
 
 async fn put_config(
@@ -34,8 +37,13 @@ async fn put_config(
     Json(request): Json<SaveConfigRequest>,
 ) -> ApiResult<Json<Preferences>> {
     Ok(Json(
-        preferences::save_preferences(request.pipeline, request.providers, request.typesetting)
-            .await?,
+        preferences::save_preferences(
+            request.pipeline,
+            request.providers,
+            request.typesetting,
+            request.remote_credentials,
+        )
+        .await?,
     ))
 }
 

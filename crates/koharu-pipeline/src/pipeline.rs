@@ -15,6 +15,7 @@ pub struct Pipeline {
     current: Arc<ArcSwap<StageRunner>>,
     resources: Arc<ResourceMonitor>,
     execution: Arc<tokio::sync::Mutex<()>>,
+    inference: crate::InferenceService,
 }
 
 impl Pipeline {
@@ -41,6 +42,7 @@ impl Pipeline {
         let current = Arc::new(ArcSwap::from_pointee(runner));
         let watched = current.clone();
         let watched_resources = resources.clone();
+        let watched_device = device.clone();
         let _watcher = tokio::runtime::Handle::try_current()
             .context("pipeline requires a Tokio runtime")?
             .spawn(async move {
@@ -50,7 +52,7 @@ impl Pipeline {
                         StageRunner::new(
                             &value,
                             translator.clone(),
-                            &device,
+                            &watched_device,
                             watched_resources.clone(),
                         )
                     });
@@ -60,11 +62,24 @@ impl Pipeline {
                     }
                 }
             });
+        let execution = Arc::new(tokio::sync::Mutex::new(()));
+        let inference = crate::InferenceService::from_config(
+            crate::ServerConfig::load()?,
+            execution.clone(),
+            &device,
+        )?;
+
+        inference.attach_pipeline(&current);
         Ok(Self {
             current,
             resources,
-            execution: Arc::new(tokio::sync::Mutex::new(())),
+            execution,
+            inference,
         })
+    }
+
+    pub fn inference(&self) -> crate::InferenceService {
+        self.inference.clone()
     }
 
     pub fn subscribe_resources(&self) -> tokio::sync::watch::Receiver<ResourceSnapshot> {
@@ -80,6 +95,7 @@ impl Pipeline {
         committer: &mut dyn Committer,
     ) -> std::result::Result<Report, PipelineError> {
         let _execution = self.execution.lock().await;
+        self.inference.evict_models().await;
         Execution::new(
             self.current.load_full(),
             self.resources.clone(),

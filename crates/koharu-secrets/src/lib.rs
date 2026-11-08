@@ -116,6 +116,9 @@ pub fn get(key: SecretKey<'_>) -> anyhow::Result<Option<SecretString>> {
     if is_read_only() {
         return Ok(None);
     }
+    if file_store_directory().is_some() {
+        return file_store_get(key);
+    }
     match entry(key.name())?.get_password() {
         Ok(value) => Ok(Some(SecretString::from(value))),
         Err(keyring_core::Error::NoEntry) => Ok(None),
@@ -131,6 +134,9 @@ pub fn set(key: SecretKey<'_>, secret: &SecretString) -> anyhow::Result<()> {
             key.environment_variable().unwrap_or("the environment")
         );
     }
+    if file_store_directory().is_some() {
+        return file_store_set(key, secret);
+    }
     entry(key.name())?.set_password(secret.expose_secret())?;
     Ok(())
 }
@@ -143,8 +149,83 @@ pub fn delete(key: SecretKey<'_>) -> anyhow::Result<()> {
             key.environment_variable().unwrap_or("the environment")
         );
     }
+    if file_store_directory().is_some() {
+        return file_store_delete(key);
+    }
     match entry(key.name())?.delete_credential() {
         Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn file_store_directory() -> Option<std::path::PathBuf> {
+    (std::env::var_os(MODE_VARIABLE).is_some_and(|mode| mode == "file")).then(|| {
+        std::env::var_os("KOHARU_CREDENTIAL_DIR").map_or_else(
+            || {
+                dirs::data_local_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("."))
+                    .join("Koharu/credentials")
+            },
+            std::path::PathBuf::from,
+        )
+    })
+}
+
+fn file_store_path(key: SecretKey<'_>) -> anyhow::Result<std::path::PathBuf> {
+    anyhow::ensure!(
+        key.name()
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')),
+        "invalid credential name"
+    );
+    Ok(file_store_directory()
+        .ok_or_else(|| anyhow::anyhow!("file credential store is not selected"))?
+        .join(key.name()))
+}
+
+fn file_store_get(key: SecretKey<'_>) -> anyhow::Result<Option<SecretString>> {
+    let path = file_store_path(key)?;
+    match std::fs::read_to_string(&path) {
+        Ok(value) => Ok(Some(value.into())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn file_store_set(key: SecretKey<'_>, secret: &SecretString) -> anyhow::Result<()> {
+    let path = file_store_path(key)?;
+    write_secret_file(&path, secret)
+}
+
+fn write_secret_file(path: &std::path::Path, secret: &SecretString) -> anyhow::Result<()> {
+    use std::io::Write;
+    let directory = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("credential directory is missing"))?;
+    std::fs::create_dir_all(directory)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))?;
+    }
+    let mut temporary = tempfile::NamedTempFile::new_in(directory)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        temporary
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    temporary.write_all(secret.expose_secret().as_bytes())?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path)?;
+    Ok(())
+}
+
+fn file_store_delete(key: SecretKey<'_>) -> anyhow::Result<()> {
+    match std::fs::remove_file(file_store_path(key)?) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error.into()),
     }
 }
@@ -214,5 +295,27 @@ mod tests {
         assert!(environment_only(Some("environment".into())));
         assert!(!environment_only(None));
         assert!(!environment_only(Some("keyring".into())));
+    }
+
+    #[test]
+    fn container_credentials_are_written_atomically_and_private() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("credentials");
+        let path = root.join("pipeline-ocr");
+        write_secret_file(&path, &SecretString::from("first")).unwrap();
+        write_secret_file(&path, &SecretString::from("second")).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "second");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
     }
 }
