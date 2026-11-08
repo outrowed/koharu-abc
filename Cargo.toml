@@ -52,7 +52,7 @@ fast_image_resize = { version = "6.1.0", features = ["image", "rayon"] }
 anyhow = "1.0.104"
 axum = { version = "0.8", features = ["multipart"] }
 async-trait = "0.1.92"
-tower-http = "0.6"
+tower-http = "0.7"
 tokio-stream = "0.1"
 backon = { version = "1.6.0", default-features = false, features = ["std", "tokio-sleep"] }
 imageproc = "0.27.0"
